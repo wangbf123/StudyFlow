@@ -1,0 +1,77 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: studyflow-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root123456
+      MYSQL_DATABASE: studyflow
+      MYSQL_USER: studyflow
+      MYSQL_PASSWORD: studyflow123
+      TZ: Asia/Shanghai
+    ports:
+      - "3307:3306"
+    volumes:
+      - studyflow-mysql:/var/lib/mysql
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+
+  redis:
+    image: redis:7.4
+    container_name: studyflow-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - studyflow-redis:/data
+
+  minio:
+    image: minio/minio:latest
+    container_name: studyflow-minio
+    environment:
+      MINIO_ROOT_USER: studyflow
+      MINIO_ROOT_PASSWORD: studyflow123
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - studyflow-minio:/data
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    container_name: studyflow-elasticsearch
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - studyflow-elasticsearch:/usr/share/elasticsearch/data
+
+  rocketmq-namesrv:
+    image: apache/rocketmq:5.3.0
+    container_name: studyflow-rocketmq-namesrv
+    command: sh mqnamesrv
+    ports:
+      - "9876:9876"
+
+  rocketmq-broker:
+    image: apache/rocketmq:5.3.0
+    container_name: studyflow-rocketmq-broker
+    depends_on:
+      - rocketmq-namesrv
+    command: sh mqbroker -n rocketmq-namesrv:9876 -c /home/rocketmq/broker.conf
+    ports:
+      - "10909:10909"
+      - "10911:10911"
+    volumes:
+      - ./docker/rocketmq/broker.conf:/home/rocketmq/broker.conf
+
+volumes:
+  studyflow-mysql:
+  studyflow-redis:
+  studyflow-minio:
+  studyflow-elasticsearch:

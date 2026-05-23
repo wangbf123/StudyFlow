@@ -1,0 +1,27 @@
+# Java / Maven
+studyflow/target/
+studyflow/logs/
+studyflow/*.log
+studyflow/.idea/
+studyflow/*.iml
+
+# Frontend
+studyflow-web/node_modules/
+studyflow-web/dist/
+studyflow-web/.npm-cache/
+studyflow-web/logs/
+
+# IDE / OS
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+*.env
+application-local.yml
+application-dev.yml
+
+# Runtime data
+**/*.data

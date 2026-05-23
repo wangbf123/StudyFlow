@@ -1,0 +1,133 @@
+CREATE DATABASE IF NOT EXISTS studyflow DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE studyflow;
+
+CREATE TABLE IF NOT EXISTS sys_user (
+  id BIGINT PRIMARY KEY,
+  username VARCHAR(64) NOT NULL,
+  password_hash VARCHAR(120) NOT NULL,
+  nickname VARCHAR(64) NOT NULL,
+  role VARCHAR(32) NOT NULL DEFAULT 'USER',
+  status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+  create_time DATETIME NOT NULL,
+  update_time DATETIME NOT NULL,
+  UNIQUE KEY uk_user_username (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS knowledge_base (
+  id BIGINT PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  name VARCHAR(80) NOT NULL,
+  description VARCHAR(500) DEFAULT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+  create_time DATETIME NOT NULL,
+  update_time DATETIME NOT NULL,
+  KEY idx_kb_user (user_id),
+  KEY idx_kb_user_status (user_id, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS document (
+  id BIGINT PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  knowledge_base_id BIGINT NOT NULL,
+  original_file_name VARCHAR(255) NOT NULL,
+  file_type VARCHAR(32) NOT NULL,
+  file_size BIGINT NOT NULL,
+  file_md5 CHAR(32) NOT NULL,
+  bucket VARCHAR(80) NOT NULL,
+  object_key VARCHAR(500) NOT NULL,
+  parse_status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+  summary TEXT DEFAULT NULL,
+  create_time DATETIME NOT NULL,
+  update_time DATETIME NOT NULL,
+  KEY idx_doc_user_kb (user_id, knowledge_base_id),
+  KEY idx_doc_md5 (file_md5),
+  KEY idx_doc_parse_status (parse_status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS parse_task (
+  id BIGINT PRIMARY KEY,
+  task_no VARCHAR(64) NOT NULL,
+  document_id BIGINT NOT NULL,
+  user_id BIGINT NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+  retry_count INT NOT NULL DEFAULT 0,
+  max_retry_count INT NOT NULL DEFAULT 3,
+  error_message VARCHAR(1000) DEFAULT NULL,
+  started_time DATETIME DEFAULT NULL,
+  finished_time DATETIME DEFAULT NULL,
+  create_time DATETIME NOT NULL,
+  update_time DATETIME NOT NULL,
+  UNIQUE KEY uk_task_no (task_no),
+  KEY idx_task_doc (document_id),
+  KEY idx_task_user_status (user_id, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS document_chunk (
+  id BIGINT PRIMARY KEY,
+  document_id BIGINT NOT NULL,
+  knowledge_base_id BIGINT NOT NULL,
+  user_id BIGINT NOT NULL,
+  chunk_index INT NOT NULL,
+  content TEXT NOT NULL,
+  char_count INT NOT NULL,
+  create_time DATETIME NOT NULL,
+  KEY idx_chunk_doc (document_id),
+  KEY idx_chunk_kb (user_id, knowledge_base_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ai_summary (
+  id BIGINT PRIMARY KEY,
+  document_id BIGINT NOT NULL,
+  user_id BIGINT NOT NULL,
+  summary TEXT NOT NULL,
+  keywords VARCHAR(500) DEFAULT NULL,
+  provider VARCHAR(64) NOT NULL DEFAULT 'mock',
+  create_time DATETIME NOT NULL,
+  update_time DATETIME NOT NULL,
+  UNIQUE KEY uk_summary_doc (document_id),
+  KEY idx_summary_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS qa_session (
+  id BIGINT PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  knowledge_base_id BIGINT NOT NULL,
+  title VARCHAR(120) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+  create_time DATETIME NOT NULL,
+  update_time DATETIME NOT NULL,
+  KEY idx_qa_session_user_kb (user_id, knowledge_base_id, create_time),
+  KEY idx_qa_session_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS qa_message (
+  id BIGINT PRIMARY KEY,
+  session_id BIGINT NOT NULL,
+  user_id BIGINT NOT NULL,
+  knowledge_base_id BIGINT NOT NULL,
+  role VARCHAR(32) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'SUCCESS',
+  content MEDIUMTEXT NOT NULL,
+  model_name VARCHAR(120) DEFAULT NULL,
+  prompt_tokens INT DEFAULT NULL,
+  completion_tokens INT DEFAULT NULL,
+  latency_ms BIGINT DEFAULT NULL,
+  error_message VARCHAR(1000) DEFAULT NULL,
+  create_time DATETIME NOT NULL,
+  KEY idx_qa_message_session_time (session_id, create_time),
+  KEY idx_qa_message_user_kb (user_id, knowledge_base_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS qa_citation (
+  id BIGINT PRIMARY KEY,
+  message_id BIGINT NOT NULL,
+  document_id BIGINT NOT NULL,
+  chunk_id BIGINT NOT NULL,
+  chunk_index INT NOT NULL,
+  document_name VARCHAR(255) NOT NULL,
+  content_preview VARCHAR(1000) NOT NULL,
+  score DOUBLE DEFAULT NULL,
+  create_time DATETIME NOT NULL,
+  KEY idx_qa_citation_message (message_id),
+  KEY idx_qa_citation_chunk (chunk_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
