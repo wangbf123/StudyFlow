@@ -70,8 +70,28 @@ services:
     volumes:
       - ./docker/rocketmq/broker.conf:/home/rocketmq/broker.conf
 
+  paddleocr:
+    build:
+      context: ./ocr-service
+    container_name: studyflow-paddleocr
+    environment:
+      OCR_DEVICE: cpu
+      OCR_LANG: ch
+      OCR_DPI: 180
+      OCR_MAX_FILE_MB: 80
+      OCR_MAX_PAGES: 100
+      PADDLE_PDX_MODEL_SOURCE: BOS
+    ports:
+      - "8866:8866"
+    shm_size: "1gb"
+    volumes:
+      - studyflow-paddleocr-models:/root/.paddlex
+      - studyflow-paddleocr-cache:/root/.cache
+
 volumes:
   studyflow-mysql:
   studyflow-redis:
   studyflow-minio:
   studyflow-elasticsearch:
+  studyflow-paddleocr-models:
+  studyflow-paddleocr-cache:

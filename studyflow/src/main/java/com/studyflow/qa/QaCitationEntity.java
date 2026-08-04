@@ -18,6 +18,8 @@ public class QaCitationEntity {
     private Long documentId;
     private Long chunkId;
     private Integer chunkIndex;
+    private Integer pageNumber;
+    private String parserType;
     private String documentName;
     private String contentPreview;
     private Double score;

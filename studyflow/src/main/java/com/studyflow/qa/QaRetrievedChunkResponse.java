@@ -6,9 +6,16 @@ public record QaRetrievedChunkResponse(
         Long documentId,
         Long chunkId,
         Integer chunkIndex,
+        Integer pageNumber,
+        String parserType,
+        Double ocrConfidence,
         String documentName,
         String content,
         Double score,
+        Double bm25Score,
+        Double vectorScore,
+        Double rerankScore,
+        String source,
         Boolean included
 ) {
     public static QaRetrievedChunkResponse from(RetrievedChunk chunk) {
@@ -20,9 +27,16 @@ public record QaRetrievedChunkResponse(
                 chunk.documentId(),
                 chunk.chunkId(),
                 chunk.chunkIndex(),
+                chunk.pageNumber(),
+                chunk.parserType(),
+                chunk.ocrConfidence(),
                 chunk.fileName(),
                 chunk.content(),
                 chunk.score(),
+                chunk.bm25Score(),
+                chunk.vectorScore(),
+                chunk.rerankScore(),
+                chunk.source(),
                 included
         );
     }

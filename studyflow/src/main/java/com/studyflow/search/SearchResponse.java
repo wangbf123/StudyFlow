@@ -6,18 +6,38 @@ public record SearchResponse(
         Long knowledgeBaseId,
         String fileName,
         Integer chunkIndex,
+        Integer pageNumber,
+        String parserType,
+        Double ocrConfidence,
         String content,
-        Double score
+        Double score,
+        Double bm25Score,
+        Double vectorScore,
+        Double rerankScore,
+        String source,
+        Boolean hasEmbedding,
+        String embeddingModel,
+        Integer embeddingDim
 ) {
-    public static SearchResponse from(DocumentChunkIndex index, Double score) {
+    public static SearchResponse from(ChunkSearchResult result) {
         return new SearchResponse(
-                index.getChunkId(),
-                index.getDocumentId(),
-                index.getKnowledgeBaseId(),
-                index.getFileName(),
-                index.getChunkIndex(),
-                index.getContent(),
-                score
+                result.chunkId(),
+                result.documentId(),
+                result.knowledgeBaseId(),
+                result.fileName(),
+                result.chunkIndex(),
+                result.pageNumber(),
+                result.parserType(),
+                result.ocrConfidence(),
+                result.content(),
+                result.score(),
+                result.bm25Score(),
+                result.vectorScore(),
+                result.rerankScore(),
+                result.source(),
+                result.hasEmbedding(),
+                result.embeddingModel(),
+                result.embeddingDim()
         );
     }
 }

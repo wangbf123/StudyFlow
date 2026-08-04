@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 @RequiredArgsConstructor
-@ConditionalOnProperty(prefix = "studyflow.mq", name = "mode", havingValue = "async", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "studyflow.mq", name = "mode", havingValue = "async")
 public class AsyncTaskPublisher implements TaskPublisher {
 
     private final DocumentParseService documentParseService;

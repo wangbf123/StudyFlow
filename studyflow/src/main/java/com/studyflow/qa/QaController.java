@@ -22,6 +22,7 @@ import java.util.List;
 public class QaController {
 
     private final QaService qaService;
+    private final QaEvalService qaEvalService;
 
     @PostMapping("/sessions")
     public Result<QaSessionResponse> createSession(@Valid @RequestBody QaCreateSessionRequest request) {
@@ -41,6 +42,16 @@ public class QaController {
     @PostMapping("/retrieve")
     public Result<QaRetrieveResponse> retrieve(@Valid @RequestBody QaRetrieveRequest request) {
         return Result.ok(qaService.retrieve(StpUtil.getLoginIdAsLong(), request));
+    }
+
+    @GetMapping("/evaluate/samples")
+    public Result<List<QaEvalQuestionRequest>> evaluationSamples() {
+        return Result.ok(qaEvalService.samples());
+    }
+
+    @PostMapping("/evaluate")
+    public Result<QaEvalResponse> evaluate(@Valid @RequestBody QaEvalRequest request) {
+        return Result.ok(qaEvalService.evaluate(StpUtil.getLoginIdAsLong(), request));
     }
 
     @PostMapping("/ask")

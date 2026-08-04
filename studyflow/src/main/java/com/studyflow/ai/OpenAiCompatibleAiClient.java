@@ -1,6 +1,7 @@
 package com.studyflow.ai;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.studyflow.common.BusinessException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -9,8 +10,14 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 @Component
 @RequiredArgsConstructor
@@ -19,6 +26,7 @@ public class OpenAiCompatibleAiClient implements AiClient {
 
     private final AiProperties properties;
     private final RestClient.Builder restClientBuilder;
+    private final ObjectMapper objectMapper;
 
     @Override
     public AiResult summarize(String title, String content) {
@@ -42,7 +50,8 @@ public class OpenAiCompatibleAiClient implements AiClient {
                         new Message("system", request.systemPrompt()),
                         new Message("user", request.userPrompt())
                 ),
-                request.temperature() == null ? properties.getTemperature() : request.temperature()
+                request.temperature() == null ? properties.getTemperature() : request.temperature(),
+                false
         );
 
         OpenAiChatResponse response = restClientBuilder
@@ -72,6 +81,66 @@ public class OpenAiCompatibleAiClient implements AiClient {
                 usage == null ? null : usage.promptTokens(),
                 usage == null ? null : usage.completionTokens()
         );
+    }
+
+    @Override
+    public AiChatResponse streamChat(AiChatRequest request, Consumer<AiStreamChunk> onChunk) {
+        validateConfig();
+        String model = chooseModel(request.model());
+        OpenAiChatRequest body = new OpenAiChatRequest(
+                model,
+                List.of(
+                        new Message("system", request.systemPrompt()),
+                        new Message("user", request.userPrompt())
+                ),
+                request.temperature() == null ? properties.getTemperature() : request.temperature(),
+                true
+        );
+
+        StringBuilder content = new StringBuilder();
+        AtomicReference<String> responseModel = new AtomicReference<>(model);
+        AtomicInteger promptTokens = new AtomicInteger(-1);
+        AtomicInteger completionTokens = new AtomicInteger(-1);
+
+        restClientBuilder
+                .baseUrl(trimTrailingSlash(properties.getBaseUrl()))
+                .requestFactory(requestFactory())
+                .build()
+                .post()
+                .uri("/chat/completions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .header("Authorization", "Bearer " + properties.getApiKey())
+                .body(body)
+                .exchange((clientRequest, clientResponse) -> {
+                    if (clientResponse.getStatusCode().isError()) {
+                        throw new BusinessException(502, "AI stream provider failed: HTTP "
+                                + clientResponse.getStatusCode().value());
+                    }
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                            clientResponse.getBody(), StandardCharsets.UTF_8))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            if (!line.startsWith("data:")) {
+                                continue;
+                            }
+                            String data = line.substring(5).trim();
+                            if (data.isBlank()) {
+                                continue;
+                            }
+                            if ("[DONE]".equals(data)) {
+                                break;
+                            }
+                            handleStreamData(data, responseModel, promptTokens, completionTokens, content, onChunk);
+                        }
+                    }
+                    return null;
+                });
+
+        Integer prompt = promptTokens.get() < 0 ? null : promptTokens.get();
+        Integer completion = completionTokens.get() < 0 ? null : completionTokens.get();
+        onChunk.accept(AiStreamChunk.done(responseModel.get(), prompt, completion));
+        return new AiChatResponse(content.toString(), responseModel.get(), prompt, completion);
     }
 
     private void validateConfig() {
@@ -109,10 +178,48 @@ public class OpenAiCompatibleAiClient implements AiClient {
         return factory;
     }
 
+    private void handleStreamData(
+            String data,
+            AtomicReference<String> responseModel,
+            AtomicInteger promptTokens,
+            AtomicInteger completionTokens,
+            StringBuilder content,
+            Consumer<AiStreamChunk> onChunk
+    ) {
+        try {
+            OpenAiChatStreamResponse chunk = objectMapper.readValue(data, OpenAiChatStreamResponse.class);
+            if (chunk.model() != null && !chunk.model().isBlank()) {
+                responseModel.set(chunk.model());
+            }
+            Usage usage = chunk.usage();
+            if (usage != null) {
+                if (usage.promptTokens() != null) {
+                    promptTokens.set(usage.promptTokens());
+                }
+                if (usage.completionTokens() != null) {
+                    completionTokens.set(usage.completionTokens());
+                }
+            }
+            if (chunk.choices() == null || chunk.choices().isEmpty()) {
+                return;
+            }
+            Delta delta = chunk.choices().getFirst().delta();
+            String deltaContent = delta == null ? null : delta.content();
+            if (deltaContent == null || deltaContent.isEmpty()) {
+                return;
+            }
+            content.append(deltaContent);
+            onChunk.accept(AiStreamChunk.delta(deltaContent, responseModel.get()));
+        } catch (Exception ex) {
+            throw new BusinessException(502, "Parse AI stream chunk failed: " + ex.getMessage());
+        }
+    }
+
     private record OpenAiChatRequest(
             String model,
             List<Message> messages,
-            Double temperature
+            Double temperature,
+            Boolean stream
     ) {
     }
 
@@ -129,8 +236,25 @@ public class OpenAiCompatibleAiClient implements AiClient {
     ) {
     }
 
+    private record OpenAiChatStreamResponse(
+            String model,
+            List<StreamChoice> choices,
+            Usage usage
+    ) {
+    }
+
     private record Choice(
             Message message
+    ) {
+    }
+
+    private record StreamChoice(
+            Delta delta
+    ) {
+    }
+
+    private record Delta(
+            String content
     ) {
     }
 

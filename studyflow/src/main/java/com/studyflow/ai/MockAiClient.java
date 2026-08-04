@@ -3,9 +3,18 @@ package com.studyflow.ai;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
+import java.util.LinkedHashSet;
+import java.util.Set;
+import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 @Component
 @ConditionalOnProperty(prefix = "studyflow.ai", name = "provider", havingValue = "mock", matchIfMissing = true)
 public class MockAiClient implements AiClient {
+
+    private static final Pattern SOURCE_ID_PATTERN = Pattern.compile("Source ID:\\s*(S\\d+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern AGENT_SOURCE_ID_PATTERN = Pattern.compile("\\b(C\\d+)\\b", Pattern.CASE_INSENSITIVE);
 
     @Override
     public AiResult summarize(String title, String content) {
@@ -20,6 +29,20 @@ public class MockAiClient implements AiClient {
 
     @Override
     public AiChatResponse chat(AiChatRequest request) {
+        if (contains(request.systemPrompt(), "search-query rewriter")) {
+            String query = request.question() == null ? "" : request.question().replaceAll("\\s+", " ").trim();
+            return new AiChatResponse("{\"query\":\"" + escapeJson(query) + "\"}", "mock-rag", 0, 0);
+        }
+        if (contains(request.systemPrompt(), "StudyFlow learning agent orchestrator")) {
+            return mockAgentDecision(request);
+        }
+        if (contains(request.systemPrompt(), "StudyFlow learning agent final answer synthesizer")) {
+            return mockAgentSynthesis(request);
+        }
+        if (contains(request.systemPrompt(), "trusted RAG answer generator")) {
+            return structuredRagAnswer(request);
+        }
+
         String prompt = request.userPrompt() == null ? "" : request.userPrompt().replaceAll("\\s+", " ").trim();
         String question = request.question() == null ? "" : request.question().trim();
         String preview = prompt.length() > 600 ? prompt.substring(0, 600) + "..." : prompt;
@@ -36,5 +59,116 @@ public class MockAiClient implements AiClient {
                 %s
                 """.formatted(question, preview);
         return new AiChatResponse(answer, "mock-rag", 0, 0);
+    }
+
+    private AiChatResponse structuredRagAnswer(AiChatRequest request) {
+        String prompt = request.userPrompt() == null ? "" : request.userPrompt();
+        String question = request.question() == null ? "" : request.question().trim();
+        Set<String> sourceIds = extractSourceIds(prompt);
+        StringBuilder citations = new StringBuilder();
+        int count = 0;
+        for (String sourceId : sourceIds) {
+            if (count >= 2) {
+                break;
+            }
+            if (!citations.isEmpty()) {
+                citations.append(',');
+            }
+            citations.append("{\"source_id\":\"").append(escapeJson(sourceId)).append("\"}");
+            count++;
+        }
+        String answer = """
+                This is a mock trusted RAG answer generated without calling a real model.
+                It is returned as structured JSON so StudyFlow can validate citations before saving them.
+                Question: %s
+                """.formatted(question).replaceAll("\\s+", " ").trim();
+        String content = "{\"answer\":\"" + escapeJson(answer) + "\",\"citations\":[" + citations + "]}";
+        return new AiChatResponse(content, "mock-rag", 0, 0);
+    }
+
+    private AiChatResponse mockAgentDecision(AiChatRequest request) {
+        String prompt = request.userPrompt() == null ? "" : request.userPrompt();
+        String goal = request.question() == null ? "" : request.question().replaceAll("\\s+", " ").trim();
+        if (!prompt.contains("<observation ")) {
+            String content = "{\"action\":\"tool\",\"tool\":\"search_knowledge\","
+                    + "\"arguments\":{\"query\":\"" + escapeJson(goal) + "\",\"topK\":5},"
+                    + "\"summary\":\"Search the knowledge base for grounded evidence\"}";
+            return new AiChatResponse(content, "mock-agent", 0, 0);
+        }
+
+        Set<String> sourceIds = extractAgentSourceIds(prompt);
+        String sourceText = sourceIds.stream().limit(3).map(id -> "[" + id + "]")
+                .reduce((left, right) -> left + " " + right).orElse("");
+        String answer = "Mock Agent completed a real tool-selection loop for: " + goal + ". "
+                + "The answer should be synthesized from the retrieved observations " + sourceText + ". "
+                + "Configure an OpenAI-compatible provider to generate a full semantic answer.";
+        String content = "{\"action\":\"final\",\"finalAnswer\":\"" + escapeJson(answer) + "\","
+                + "\"summary\":\"Answer from the retrieved evidence\"}";
+        return new AiChatResponse(content, "mock-agent", 0, 0);
+    }
+
+    private AiChatResponse mockAgentSynthesis(AiChatRequest request) {
+        String prompt = request.userPrompt() == null ? "" : request.userPrompt();
+        Set<String> sourceIds = extractAgentSourceIds(prompt);
+        String sourceText = sourceIds.stream().limit(3).map(id -> "[" + id + "]")
+                .reduce((left, right) -> left + " " + right).orElse("no source id");
+        String answer = "Mock Agent reached its step limit and synthesized the available evidence: " + sourceText
+                + ". Configure an OpenAI-compatible provider for a full semantic answer.";
+        return new AiChatResponse(answer, "mock-agent", 0, 0);
+    }
+
+    private Set<String> extractAgentSourceIds(String prompt) {
+        Matcher matcher = AGENT_SOURCE_ID_PATTERN.matcher(prompt);
+        Set<String> sourceIds = new LinkedHashSet<>();
+        while (matcher.find()) {
+            sourceIds.add(matcher.group(1).toUpperCase());
+        }
+        return sourceIds;
+    }
+
+    private Set<String> extractSourceIds(String prompt) {
+        Matcher matcher = SOURCE_ID_PATTERN.matcher(prompt);
+        Set<String> sourceIds = new LinkedHashSet<>();
+        while (matcher.find()) {
+            sourceIds.add(matcher.group(1).toUpperCase());
+        }
+        return sourceIds;
+    }
+
+    private boolean contains(String value, String keyword) {
+        return value != null && value.toLowerCase().contains(keyword.toLowerCase());
+    }
+
+    private String escapeJson(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\r", "\\r")
+                .replace("\n", "\\n");
+    }
+
+    @Override
+    public AiChatResponse streamChat(AiChatRequest request, Consumer<AiStreamChunk> onChunk) {
+        AiChatResponse response = chat(request);
+        String content = response.content() == null ? "" : response.content();
+        int step = 48;
+        for (int i = 0; i < content.length(); i += step) {
+            String delta = content.substring(i, Math.min(i + step, content.length()));
+            onChunk.accept(AiStreamChunk.delta(delta, response.model()));
+            sleepQuietly(20);
+        }
+        onChunk.accept(AiStreamChunk.done(response.model(), response.promptTokens(), response.completionTokens()));
+        return response;
+    }
+
+    private void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
     }
 }

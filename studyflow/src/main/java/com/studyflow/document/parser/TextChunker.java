@@ -23,9 +23,32 @@ public class TextChunker {
     public List<String> chunk(String text) {
         String cleaned = clean(text);
         if (cleaned.isBlank()) {
-            return List.of("未解析到有效文本内容。");
+            return List.of();
         }
 
+        return chunkCleaned(cleaned);
+    }
+
+    public List<ParsedChunk> chunkDocument(ParsedDocument document) {
+        if (document == null || document.pages().isEmpty()) {
+            return List.of();
+        }
+        List<ParsedChunk> result = new ArrayList<>();
+        for (ParsedDocument.ParsedPage page : document.pages()) {
+            List<String> pageChunks = chunk(page.text());
+            for (String content : pageChunks) {
+                result.add(new ParsedChunk(
+                        content,
+                        page.pageNumber(),
+                        page.parserType(),
+                        page.ocrConfidence()
+                ));
+            }
+        }
+        return result;
+    }
+
+    private List<String> chunkCleaned(String cleaned) {
         List<String> chunks = new ArrayList<>();
         int start = 0;
         while (start < cleaned.length()) {
@@ -57,5 +80,13 @@ public class TextChunker {
                 .replaceAll("[ \\t\\x0B\\f]+", " ")
                 .replaceAll("\\n{3,}", "\n\n")
                 .trim();
+    }
+
+    public record ParsedChunk(
+            String content,
+            Integer pageNumber,
+            String parserType,
+            Double ocrConfidence
+    ) {
     }
 }

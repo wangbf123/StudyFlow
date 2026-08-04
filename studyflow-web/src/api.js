@@ -4,7 +4,7 @@ const TOKEN_KEY = 'studyflow_token'
 
 export const api = axios.create({
   baseURL: 'http://localhost:8080',
-  timeout: 30000
+  timeout: 120000
 })
 
 api.interceptors.request.use((config) => {
@@ -49,6 +49,42 @@ export async function streamAsk(payload, onEvent) {
   })
   if (!response.ok || !response.body) {
     throw new Error(`流式问答失败：HTTP ${response.status}`)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() || ''
+    for (const raw of events) {
+      const event = parseSse(raw)
+      if (event) onEvent(event)
+    }
+  }
+}
+
+export async function streamAgent(payload, onEvent) {
+  const response = await fetch('http://localhost:8080/api/agent/runs/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: getToken() || ''
+    },
+    body: JSON.stringify(payload)
+  })
+  if (!response.ok || !response.body) {
+    let message = `Agent 执行失败：HTTP ${response.status}`
+    try {
+      const body = await response.json()
+      message = body?.message || message
+    } catch {
+      // Keep the HTTP fallback when the response is not JSON.
+    }
+    throw new Error(message)
   }
 
   const reader = response.body.getReader()

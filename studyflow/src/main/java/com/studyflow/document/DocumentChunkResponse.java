@@ -5,7 +5,10 @@ public record DocumentChunkResponse(
         Long documentId,
         Integer chunkIndex,
         String content,
-        Integer charCount
+        Integer charCount,
+        Integer pageNumber,
+        String parserType,
+        Double ocrConfidence
 ) {
     public static DocumentChunkResponse from(DocumentChunkEntity entity) {
         return new DocumentChunkResponse(
@@ -13,7 +16,10 @@ public record DocumentChunkResponse(
                 entity.getDocumentId(),
                 entity.getChunkIndex(),
                 entity.getContent(),
-                entity.getCharCount()
+                entity.getCharCount(),
+                entity.getPageNumber(),
+                entity.getParserType(),
+                entity.getOcrConfidence()
         );
     }
 }

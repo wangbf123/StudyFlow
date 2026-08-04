@@ -5,6 +5,8 @@ public record QaCitationResponse(
         Long documentId,
         Long chunkId,
         Integer chunkIndex,
+        Integer pageNumber,
+        String parserType,
         String documentName,
         String contentPreview,
         Double score
@@ -15,6 +17,8 @@ public record QaCitationResponse(
                 entity.getDocumentId(),
                 entity.getChunkId(),
                 entity.getChunkIndex(),
+                entity.getPageNumber(),
+                entity.getParserType(),
                 entity.getDocumentName(),
                 entity.getContentPreview(),
                 entity.getScore()

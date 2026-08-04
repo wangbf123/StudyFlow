@@ -10,6 +10,10 @@ public record DocumentResponse(
         Long fileSize,
         String fileMd5,
         String parseStatus,
+        String parserType,
+        Integer pageCount,
+        Integer ocrPageCount,
+        Long ocrElapsedMs,
         String summary,
         LocalDateTime createTime
 ) {
@@ -22,6 +26,10 @@ public record DocumentResponse(
                 entity.getFileSize(),
                 entity.getFileMd5(),
                 entity.getParseStatus(),
+                entity.getParserType(),
+                entity.getPageCount(),
+                entity.getOcrPageCount(),
+                entity.getOcrElapsedMs(),
                 entity.getSummary(),
                 entity.getCreateTime()
         );

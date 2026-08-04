@@ -15,7 +15,12 @@ public class RagRetriever {
 
     public List<RetrievedChunk> retrieve(Long userId, Long knowledgeBaseId, String question) {
         int topK = Math.max(properties.getTopK(), 1);
-        return searchService.search(userId, knowledgeBaseId, question, 0, topK).stream()
+        return retrieve(userId, knowledgeBaseId, question, topK);
+    }
+
+    public List<RetrievedChunk> retrieve(Long userId, Long knowledgeBaseId, String question, int topK) {
+        int safeTopK = Math.max(topK, 1);
+        return searchService.searchChunks(userId, knowledgeBaseId, question, 0, safeTopK).stream()
                 .filter(item -> item.content() != null && !item.content().isBlank())
                 .map(item -> new RetrievedChunk(
                         item.chunkId(),
@@ -23,7 +28,14 @@ public class RagRetriever {
                         item.knowledgeBaseId(),
                         item.fileName(),
                         item.chunkIndex(),
+                        item.pageNumber(),
+                        item.parserType(),
+                        item.ocrConfidence(),
                         item.content(),
+                        item.bm25Score(),
+                        item.vectorScore(),
+                        item.rerankScore(),
+                        item.source(),
                         item.score()
                 ))
                 .toList();

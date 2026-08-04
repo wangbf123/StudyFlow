@@ -7,10 +7,14 @@ public record QaAskResponse(
         Long userMessageId,
         Long assistantMessageId,
         String answer,
+        String rewrittenQuery,
         String modelName,
         Integer promptTokens,
         Integer completionTokens,
         Long latencyMs,
+        Boolean structuredOutput,
+        Integer validatedCitationCount,
+        Integer rejectedCitationCount,
         List<QaCitationResponse> citations
 ) {
 }

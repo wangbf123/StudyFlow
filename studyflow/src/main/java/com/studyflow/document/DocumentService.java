@@ -117,6 +117,72 @@ public class DocumentService {
         return document;
     }
 
+    public String normalizeFileType(String fileName) {
+        String fileType = extensionOf(fileName);
+        validateFileType(fileType);
+        return fileType;
+    }
+
+    public String buildStoredObjectKey(Long userId, Long knowledgeBaseId, String md5, String fileType) {
+        return buildObjectKey(userId, knowledgeBaseId, md5, fileType);
+    }
+
+    public String detectContentType(String fileType, String requestContentType) {
+        return contentType(fileType, requestContentType);
+    }
+
+    @Transactional
+    public DocumentUploadResponse reuseParsedDocument(
+            Long userId,
+            Long knowledgeBaseId,
+            String originalFileName,
+            long fileSize,
+            String md5
+    ) {
+        knowledgeBaseService.getOwnedActive(userId, knowledgeBaseId);
+        DocumentEntity reusable = findReusableParsedDocument(md5);
+        if (reusable == null) {
+            return null;
+        }
+        return copyParsedDocument(userId, knowledgeBaseId, originalFileName, fileSize, reusable);
+    }
+
+    @Transactional
+    public DocumentUploadResponse createStoredDocumentAndTask(
+            Long userId,
+            Long knowledgeBaseId,
+            String originalFileName,
+            String fileType,
+            long fileSize,
+            String md5,
+            String objectKey
+    ) {
+        knowledgeBaseService.getOwnedActive(userId, knowledgeBaseId);
+        DocumentEntity document = new DocumentEntity();
+        document.setUserId(userId);
+        document.setKnowledgeBaseId(knowledgeBaseId);
+        document.setOriginalFileName(originalFileName);
+        document.setFileType(fileType);
+        document.setFileSize(fileSize);
+        document.setFileMd5(md5);
+        document.setBucket(storageService.bucket());
+        document.setObjectKey(objectKey);
+        document.setParseStatus(DocumentStatus.PENDING);
+        documentMapper.insert(document);
+
+        ParseTaskEntity task = new ParseTaskEntity();
+        task.setTaskNo("PT" + UUID.randomUUID().toString().replace("-", ""));
+        task.setDocumentId(document.getId());
+        task.setUserId(userId);
+        task.setStatus(TaskStatus.PENDING);
+        task.setRetryCount(0);
+        task.setMaxRetryCount(3);
+        parseTaskMapper.insert(task);
+
+        publishAfterCommit(task.getId());
+        return new DocumentUploadResponse(document.getId(), task.getId(), document.getParseStatus());
+    }
+
     private DocumentUploadResponse createNewDocumentAndTask(
             Long userId,
             Long knowledgeBaseId,
@@ -171,6 +237,10 @@ public class DocumentService {
         document.setBucket(reusable.getBucket());
         document.setObjectKey(reusable.getObjectKey());
         document.setParseStatus(DocumentStatus.SUCCESS);
+        document.setParserType(reusable.getParserType());
+        document.setPageCount(reusable.getPageCount());
+        document.setOcrPageCount(reusable.getOcrPageCount());
+        document.setOcrElapsedMs(reusable.getOcrElapsedMs());
         document.setSummary(reusable.getSummary());
         documentMapper.insert(document);
 
@@ -204,6 +274,12 @@ public class DocumentService {
                     targetChunk.setChunkIndex(sourceChunk.getChunkIndex());
                     targetChunk.setContent(sourceChunk.getContent());
                     targetChunk.setCharCount(sourceChunk.getCharCount());
+                    targetChunk.setPageNumber(sourceChunk.getPageNumber());
+                    targetChunk.setParserType(sourceChunk.getParserType());
+                    targetChunk.setOcrConfidence(sourceChunk.getOcrConfidence());
+                    targetChunk.setEmbedding(sourceChunk.getEmbedding());
+                    targetChunk.setEmbeddingModel(sourceChunk.getEmbeddingModel());
+                    targetChunk.setEmbeddingDim(sourceChunk.getEmbeddingDim());
                     documentChunkMapper.insert(targetChunk);
                     return targetChunk;
                 })
@@ -263,8 +339,8 @@ public class DocumentService {
     }
 
     private void validateFileType(String fileType) {
-        if (!List.of("pdf", "txt", "md", "markdown").contains(fileType)) {
-            throw new BusinessException("V1 仅支持 PDF、TXT、Markdown 文件");
+        if (!List.of("pdf", "txt", "md", "markdown", "jpg", "jpeg", "png", "webp").contains(fileType)) {
+            throw new BusinessException("支持 PDF、TXT、Markdown、JPG、PNG、WebP 文件");
         }
     }
 
@@ -287,6 +363,9 @@ public class DocumentService {
         }
         return switch (fileType) {
             case "pdf" -> "application/pdf";
+            case "jpg", "jpeg" -> "image/jpeg";
+            case "png" -> "image/png";
+            case "webp" -> "image/webp";
             case "md", "markdown" -> "text/markdown;charset=utf-8";
             default -> "text/plain;charset=utf-8";
         };

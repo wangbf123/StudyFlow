@@ -23,6 +23,10 @@ public class DocumentEntity {
     private String bucket;
     private String objectKey;
     private String parseStatus;
+    private String parserType;
+    private Integer pageCount;
+    private Integer ocrPageCount;
+    private Long ocrElapsedMs;
     private String summary;
 
     @TableField(fill = FieldFill.INSERT)

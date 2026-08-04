@@ -1,329 +1,303 @@
-# StudyFlow
+# StudyFlow Backend
 
-StudyFlow 是一个面向学习资料管理和复习问答场景的 Java 后端项目。V4 的目标是让项目既能写进简历，也能在面试中完整演示和被追问。
+本目录包含 StudyFlow 的 Spring Boot 后端、数据库迁移、Docker Compose 基础设施、OCR 服务和验证脚本。系统负责账号与权限、知识库、文件上传、文档解析、搜索索引、RAG 问答、引用追踪、质量评估以及学习 Agent 编排。
 
-## 项目定位
+总体设计与项目价值请先阅读仓库根目录的 `README.md`，更深入的实现说明见 `docs/TECHNICAL_ARCHITECTURE.md`。
 
-```text
-学习资料上传
--> 异步解析
--> 文本分片
--> Elasticsearch 检索
--> RAG 知识库问答
--> 问答历史
--> 引用来源追踪
--> Vue3 演示端
-```
+## 运行组件
 
-## 技术栈
+| 组件 | 默认端口 | 用途 |
+| --- | ---: | --- |
+| Spring Boot | 8080 | REST API、SSE、任务编排 |
+| MySQL | 3307 | 业务数据、任务状态、消息、引用和 Agent 轨迹 |
+| Redis | 6379 | 令牌桶限流、Redisson 分布式锁 |
+| MinIO | 9000 / 9001 | 文档对象、上传分片、管理控制台 |
+| Elasticsearch | 9200 | 文档分片 BM25 索引 |
+| RocketMQ NameServer | 9876 | 解析任务路由 |
+| RocketMQ Broker | 10909 / 10911 | 解析任务消息 |
+| PaddleOCR | 8866 | 扫描页与图片识别 |
 
-- JDK 21
-- Spring Boot 3.3
-- MyBatis-Plus
-- MySQL 8
-- Redis 7
-- Redisson
-- Elasticsearch 8
-- MinIO
-- Sa-Token
-- Flyway
-- Knife4j
-- PDFBox
-- Docker Compose
-- Vue 3 + Vite + Element Plus
+## 快速启动
 
-## V4 功能
-
-- 用户注册、登录、退出登录
-- 知识库创建、查询、修改、删除
-- PDF/TXT/Markdown 文件上传
-- MinIO 原文件存储
-- `parse_task` 异步解析任务
-- 文本清洗、文档分片、分片入库
-- 文档分片同步写入 Elasticsearch
-- 知识库维度全文搜索
-- 文件 MD5 秒传和解析结果复用
-- Redisson 分布式锁避免相同文件并发重复解析
-- Redis 固定窗口限流
-- RAG 检索调试接口
-- 普通 RAG 问答接口
-- SSE 流式问答接口
-- 问答会话、问答消息、引用来源落库
-- 引用来源详情接口，可查看引用分片原文
-- AI Client 抽象，支持 `mock` 和 `openai-compatible`
-- Vue3 演示前端
-
-## 启动后端
-
-### 1. 启动依赖
-
-默认使用本地异步解析模式，不需要启动 RocketMQ。
+### 1. 启动完整依赖
 
 ```powershell
-cd "C:\Users\29272\Documents\New project\studyflow"
-docker compose up -d mysql redis minio elasticsearch
+docker compose up -d mysql redis minio elasticsearch rocketmq-namesrv rocketmq-broker
 ```
 
-端口：
+处理扫描 PDF 或图片时再启动 OCR：
 
-```text
-MySQL:          localhost:3307
-Redis:          localhost:6379
-Elasticsearch:  http://localhost:9200
-MinIO:          http://localhost:9001
-MinIO user:     studyflow
-MinIO password: studyflow123
+```powershell
+docker compose up -d --build paddleocr
+Invoke-RestMethod http://localhost:8866/health
 ```
 
-### 2. 启动 Spring Boot
+### 2. 启动后端
 
 ```powershell
 mvn spring-boot:run
 ```
 
-接口文档：
+接口文档：`http://localhost:8080/doc.html`。
 
-```text
-http://localhost:8080/doc.html
-```
+### 3. 使用本地异步模式
 
-### 3. 打包
+如果不需要 RocketMQ，可以只启动四个基础服务：
 
 ```powershell
-mvn -q -DskipTests package
-java -jar target\studyflow-0.0.1-SNAPSHOT.jar
+$env:STUDYFLOW_MQ_MODE="async"
+docker compose up -d mysql redis minio elasticsearch
+mvn spring-boot:run
 ```
 
-## 启动前端
+`rocketmq` 模式适合验证消息发布与消费链路，`async` 模式适合资源较少的本地环境。
 
-```powershell
-cd "C:\Users\29272\Documents\New project\studyflow-web"
-npm.cmd install --cache .\.npm-cache
-npm.cmd run dev
-```
+## 配置分组
 
-访问：
+`src/main/resources/application.yml` 中的项目配置统一放在 `studyflow` 前缀下：
 
-```text
-http://localhost:5173
-```
+| 配置 | 作用 |
+| --- | --- |
+| `studyflow.mq` | 任务执行模式和解析 Topic |
+| `studyflow.minio` | 对象存储地址、凭据和 Bucket |
+| `studyflow.document` | 分片大小和重叠字符数 |
+| `studyflow.ocr` | OCR 开关、地址、超时、触发阈值和最大页数 |
+| `studyflow.ai` | AI 提供方、模型、超时和温度 |
+| `studyflow.embedding` | 向量提供方、模型、维度和批量大小 |
+| `studyflow.rag` | topK、上下文预算、候选规模和融合权重 |
+| `studyflow.agent` | Agent 开关、最大步数、历史和工具结果上限 |
+| `studyflow.rate-limit` | 不同接口的令牌桶容量和恢复窗口 |
 
-## AI 配置
-
-默认是 Mock AI，不需要 API Key，可以完整跑通 RAG 链路。
-
-```yaml
-studyflow:
-  ai:
-    provider: ${STUDYFLOW_AI_PROVIDER:mock}
-    model: ${STUDYFLOW_AI_MODEL:mock-rag}
-```
-
-接真实大模型时使用 OpenAI-compatible：
+真实 AI 服务配置示例：
 
 ```powershell
 $env:STUDYFLOW_AI_PROVIDER="openai-compatible"
 $env:STUDYFLOW_AI_BASE_URL="https://api.example.com/v1"
 $env:STUDYFLOW_AI_API_KEY="your-api-key"
-$env:STUDYFLOW_AI_MODEL="your-model"
-mvn spring-boot:run
+$env:STUDYFLOW_AI_MODEL="your-chat-model"
+
+$env:STUDYFLOW_EMBEDDING_PROVIDER="openai-compatible"
+$env:STUDYFLOW_EMBEDDING_BASE_URL="https://api.example.com/v1"
+$env:STUDYFLOW_EMBEDDING_API_KEY="your-api-key"
+$env:STUDYFLOW_EMBEDDING_MODEL="your-embedding-model"
+$env:STUDYFLOW_EMBEDDING_DIMENSION="1024"
 ```
 
-## 核心接口
+## 文档处理状态机
 
-注册：
+```text
+document.parse_status: PENDING -> PROCESSING -> SUCCESS
+                                      |          ^
+                                      v          |
+                                    FAILED <- RETRY
+
+parse_task.status: PENDING -> PROCESSING -> SUCCESS
+                                |
+                                v
+                            RETRYING -> PROCESSING
+                                |
+                                v
+                              FAILED
+```
+
+上传完成后会创建 `document` 和 `parse_task`。任务执行器获取文件 MD5 对应的 Redisson 锁，再检查是否存在可复用结果。如果没有，则读取 MinIO 对象、解析文本、切分、生成向量、保存分片、生成摘要并建立 Elasticsearch 索引。
+
+## 解析策略
+
+| 文件类型 | 处理方式 |
+| --- | --- |
+| TXT | UTF-8 文本读取 |
+| Markdown | UTF-8 文本读取并保留原始结构文本 |
+| 文本型 PDF | PDFBox 按页抽取 |
+| 扫描 PDF | 低文本页调用 PaddleOCR |
+| 混合 PDF | 文本页使用 PDFBox，扫描页使用 PaddleOCR |
+| JPG / JPEG / PNG / WebP | PaddleOCR |
+
+PDF 不是简单地整份调用 OCR。解析器先按页抽取文本，计算有效字符数，并检测页面资源中是否存在栅格图像。只有达到低文本页条件时才调用 OCR，降低延迟和资源消耗。
+
+## 混合检索
+
+搜索服务先从 Elasticsearch 获取 BM25 候选，再根据配置生成问题向量。向量候选通过数据库中带 embedding 的分片计算归一化余弦相似度，最后与轻量重排分数组合。
+
+```text
+finalScore = weightedAverage(
+  bm25Weight  * normalizedBm25,
+  vectorWeight * cosineSimilarity,
+  rerankWeight * lexicalRerank
+)
+```
+
+某个候选缺少兼容向量时，不会把空信号直接记为零分，而是按实际存在的信号重新归一化。embedding 的模型名和维度也参与兼容性判断，避免模型升级后错误比较不同向量空间。
+
+## RAG 可信链路
+
+`QaService` 负责会话、消息、检索和生成的事务边界：
+
+1. 校验知识库归属并创建或加载会话。
+2. 保存用户消息。
+3. 使用 `RagQueryRewriter` 生成检索查询。
+4. 使用 `RagRetriever` 取得候选分片。
+5. 使用 `RagPromptBuilder` 按 `topK` 和 `max-context-chars` 选择上下文。
+6. 调用 `AiClient.chat` 或 `AiClient.streamChat`。
+7. 使用 `RagAnswerValidator` 校验模型引用。
+8. 保存模型消息与有效 `qa_citation`。
+9. 返回答案、模型信息、耗时、token、检索查询和引用统计。
+
+SSE 接口事件：
+
+```text
+message_start
+delta
+metadata
+citations
+message_end
+error
+```
+
+## 分片上传协议
+
+### 初始化
 
 ```http
-POST /api/auth/register
+POST /api/uploads/init
+Content-Type: application/json
+
+{
+  "knowledgeBaseId": 1,
+  "fileName": "example.pdf",
+  "fileType": "pdf",
+  "fileSize": 10485760,
+  "fileMd5": "optional-full-file-md5",
+  "chunkSize": 5242880,
+  "totalParts": 2
+}
 ```
 
-登录：
+### 上传分片
 
 ```http
-POST /api/auth/login
+POST /api/uploads/{uploadId}/parts?partNumber=1&partMd5={md5}
+Content-Type: multipart/form-data
 ```
 
-创建知识库：
+### 查询进度
 
 ```http
-POST /api/knowledge-bases
+GET /api/uploads/{uploadId}/parts
 ```
 
-上传文档：
+### 完成合并
 
 ```http
-POST /api/documents/upload?knowledgeBaseId={knowledgeBaseId}
+POST /api/uploads/{uploadId}/complete
 ```
 
-知识库全文搜索：
+服务端会检查分片序号、数量、大小和 MD5，再通过 MinIO Compose 合并。完成接口使用分布式锁，可安全应对重复点击和并发请求。
 
-```http
-GET /api/search?knowledgeBaseId={knowledgeBaseId}&keyword=Redis&page=0&size=10
+## Agent 执行模型
+
+Agent 每轮调用模型得到一个结构化决策：
+
+```json
+{
+  "action": "tool",
+  "tool": "search_knowledge",
+  "arguments": {
+    "query": "Redis 持久化",
+    "topK": 5
+  },
+  "summary": "检索相关证据"
+}
 ```
 
-RAG 检索调试：
+或者：
 
-```http
-POST /api/qa/retrieve
+```json
+{
+  "action": "final",
+  "finalAnswer": "根据证据整理的答案 [C123]",
+  "summary": "完成资料归纳"
+}
 ```
 
-RAG 问答：
+工具执行发生在服务端，模型不会获得数据库、MinIO 或 Elasticsearch 的直接连接。每个工具都接收由服务端创建的 `userId` 和 `knowledgeBaseId` 上下文，并再次调用领域服务完成权限验证。
 
-```http
-POST /api/qa/ask
+## API 清单
+
+```text
+auth       /api/auth/*
+knowledge  /api/knowledge-bases/*
+document   /api/documents/*
+upload     /api/uploads/*
+task       /api/tasks/*
+search     /api/search
+qa         /api/qa/*
+agent      /api/agent/*
 ```
 
-SSE 流式问答：
+请求和响应的完整字段、校验约束以及示例请以 Knife4j 页面和源码 record 定义为准。
 
-```http
-POST /api/qa/ask/stream
+## 数据库迁移
+
+```text
+src/main/resources/db/migration/
+├── V3__qa_rag_tables.sql
+├── V4__chunk_upload_tables.sql
+├── V5__rag_embedding_columns.sql
+├── V6__learning_agent_tables.sql
+└── V7__ocr_document_metadata.sql
 ```
 
-查看引用来源：
+Flyway 在应用启动时自动执行缺失版本。迁移脚本负责问答引用、分片上传、embedding、Agent 轨迹以及 OCR 元数据的增量演进。
 
-```http
-GET /api/qa/messages/{messageId}/citations
-GET /api/qa/citations/{citationId}/chunk
-```
-
-## V4 烟测
-
-启动依赖和后端后运行：
+## 验证命令
 
 ```powershell
+mvn test
+mvn -DskipTests package
 powershell -ExecutionPolicy Bypass -File scripts\smoke-v4.ps1
 ```
 
-脚本会自动完成：
+OCR 独立验证：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\ocr-service-demo.ps1 -File "C:\path\to\scan.png"
+```
+
+JMeter 场景：
 
 ```text
-注册
-登录
-创建知识库
-上传 samples/v4-rag-demo.md
-等待解析成功
-RAG 召回
-RAG 问答
-查看引用原文
-SSE 流式问答
+scripts/jmeter-studyflow-basic.jmx
 ```
 
-成功时重点看：
-
-```text
-retrieveHitCount > 0
-includedCount > 0
-citationCount > 0
-citationChunkLength > 0
-streamEvents 包含 message_start, metadata, delta, citations, message_end
-```
-
-## V4 RAG 设计
-
-V4 仍然先使用 Elasticsearch 做召回，不急着上向量数据库。这样项目更稳，也更适合 Java 后端实习面试。
-
-```text
-用户问题
--> 校验登录态和知识库权限
--> 保存 USER 消息
--> Elasticsearch 召回 topK 文档分片
--> RagPromptBuilder 控制 maxContextChars
--> AiClient.chat 生成回答
--> 保存 ASSISTANT 消息
--> 保存 qa_citation 引用来源
--> 普通接口一次性返回，流式接口通过 SSE 分段返回
-```
-
-关键参数：
-
-```yaml
-studyflow:
-  rag:
-    top-k: 6
-    max-context-chars: 6000
-    citation-preview-chars: 300
-```
-
-## 数据表
-
-核心表：
-
-```text
-sys_user        用户
-knowledge_base  知识库
-document        文档元数据
-parse_task      解析任务
-document_chunk  文档分片
-ai_summary      文档摘要
-qa_session      问答会话
-qa_message      用户问题和 AI 回答
-qa_citation     回答引用来源
-```
-
-V3/V4 新增表由 Flyway 自动创建：
-
-```text
-src/main/resources/db/migration/V3__qa_rag_tables.sql
-```
-
-## 项目结构
+## 包结构
 
 ```text
 com.studyflow
-  common      统一响应、业务异常、全局异常处理
-  config      Sa-Token、CORS、MyBatis-Plus、限流、线程池
-  auth        注册登录
-  user        用户实体和 Mapper
-  kb          知识库
-  document    文件上传、文档记录、文档分片
-  task        解析任务、任务状态、任务重试
-  mq          TaskPublisher 抽象、Async/RocketMQ 实现
-  storage     MinIO 对象存储
-  search      Elasticsearch 分片索引与全文搜索
-  ai          AI Client 抽象、Mock、OpenAI-compatible
-  rag         RAG 检索、上下文构造、Prompt 构建
-  qa          问答会话、消息、引用来源、流式问答
+├── agent       Agent API、服务、工具注册、执行轨迹
+├── ai          摘要与聊天 Client、Mock、兼容协议、流式事件
+├── auth        注册登录与 BCrypt 校验
+├── common      统一响应、业务异常、全局异常处理
+├── config      Sa-Token、CORS、Redis 令牌桶、线程池、Jackson
+├── document    文档元数据、分片、上传入口和解析器
+├── embedding   向量生成、序列化和余弦计算
+├── kb          知识库领域逻辑
+├── mq          RocketMQ 与 Spring Async 发布器
+├── ocr         OCR HTTP 客户端和配置
+├── qa          会话、消息、问答、引用和评估
+├── rag         查询改写、召回、Prompt、重排和答案校验
+├── search      Elasticsearch 索引与混合排序
+├── storage     MinIO 对象读写、复制和合并
+├── task        解析任务状态机、重试和任务执行
+├── upload      分片上传会话与分片记录
+└── user        用户实体与数据访问
 ```
 
-前端：
+## 部署注意事项
 
-```text
-studyflow-web
-  src/App.vue      页面主逻辑
-  src/api.js       Axios 和 fetch stream
-  src/styles.css   页面样式
-```
-
-## 面试讲法
-
-可以这样讲：
-
-```text
-这个项目不是直接把用户问题转发给大模型，而是先把用户上传的资料解析成文档分片。
-分片保存到 MySQL，并同步写入 Elasticsearch。用户提问时，系统先在当前知识库中
-召回相关分片，再控制 topK 和 maxContextChars 组装 Prompt，最后通过 AiClient
-调用模型生成回答。回答和引用来源都会落库，因此能查看每个答案引用了哪些
-document_chunk，减少大模型幻觉带来的不可追溯问题。
-```
-
-可以被追问的点：
-
-- 为什么文件存 MinIO，而不是直接存 MySQL？
-- 为什么要做文档分片？
-- MySQL 和 Elasticsearch 分别存什么？
-- 为什么 RAG 要保存引用来源？
-- 如果 ES 召回不到内容怎么办？
-- 如果 AI 调用失败怎么办？
-- 为什么抽象 AiClient？
-- topK 和 maxContextChars 如何控制？
-- SSE 流式输出解决了什么体验问题？
-- Redis 限流和 Redisson 分布式锁分别解决什么问题？
-- MySQL 和 ES 数据不一致时怎么处理？
-
-## 后续可选增强
-
-- 接真实大模型 API
-- 向量检索或混合检索：BM25 + embedding
-- Rerank 重排
-- SSE 对接真实模型的原生流式输出
-- JMeter 压测和限流报告
+- Docker Compose 中的口令只用于本地环境。
+- 外部 AI 和 embedding 密钥必须通过环境变量或密钥管理系统注入。
+- 公网部署前应开启 Elasticsearch 安全认证、MinIO TLS、数据库最小权限和反向代理 HTTPS。
+- 多实例部署时需要共享 Redis、MySQL、MinIO、Elasticsearch 和消息系统。
+- OCR 建议作为独立可伸缩服务部署，并根据 CPU/GPU 资源设置并发限制。
+- 向量规模扩大后应替换当前数据库扫描方案，避免查询延迟随分片数量线性增长。

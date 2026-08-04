@@ -5,14 +5,19 @@ import com.studyflow.ai.AiChatRequest;
 import com.studyflow.ai.AiChatResponse;
 import com.studyflow.ai.AiClient;
 import com.studyflow.ai.AiProperties;
+import com.studyflow.ai.AiStreamChunk;
 import com.studyflow.common.BusinessException;
 import com.studyflow.document.DocumentChunkEntity;
 import com.studyflow.document.DocumentChunkMapper;
 import com.studyflow.kb.KnowledgeBaseEntity;
 import com.studyflow.kb.KnowledgeBaseService;
+import com.studyflow.rag.RagAnswer;
+import com.studyflow.rag.RagAnswerValidator;
 import com.studyflow.rag.RagPrompt;
 import com.studyflow.rag.RagPromptBuilder;
 import com.studyflow.rag.RagProperties;
+import com.studyflow.rag.RagQueryRewriteResult;
+import com.studyflow.rag.RagQueryRewriter;
 import com.studyflow.rag.RagRetriever;
 import com.studyflow.rag.RetrievedChunk;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -23,6 +28,8 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Service
 public class QaService {
@@ -35,6 +42,8 @@ public class QaService {
     private final QaCitationMapper qaCitationMapper;
     private final RagRetriever ragRetriever;
     private final RagPromptBuilder ragPromptBuilder;
+    private final RagQueryRewriter ragQueryRewriter;
+    private final RagAnswerValidator ragAnswerValidator;
     private final RagProperties ragProperties;
     private final AiClient aiClient;
     private final AiProperties aiProperties;
@@ -48,6 +57,8 @@ public class QaService {
             QaCitationMapper qaCitationMapper,
             RagRetriever ragRetriever,
             RagPromptBuilder ragPromptBuilder,
+            RagQueryRewriter ragQueryRewriter,
+            RagAnswerValidator ragAnswerValidator,
             RagProperties ragProperties,
             AiClient aiClient,
             AiProperties aiProperties,
@@ -60,6 +71,8 @@ public class QaService {
         this.qaCitationMapper = qaCitationMapper;
         this.ragRetriever = ragRetriever;
         this.ragPromptBuilder = ragPromptBuilder;
+        this.ragQueryRewriter = ragQueryRewriter;
+        this.ragAnswerValidator = ragAnswerValidator;
         this.ragProperties = ragProperties;
         this.aiClient = aiClient;
         this.aiProperties = aiProperties;
@@ -106,8 +119,9 @@ public class QaService {
 
     public QaRetrieveResponse retrieve(Long userId, QaRetrieveRequest request) {
         knowledgeBaseService.getOwnedActive(userId, request.knowledgeBaseId());
-        List<RetrievedChunk> retrievedChunks = ragRetriever.retrieve(userId, request.knowledgeBaseId(), request.question());
-        RagPrompt prompt = ragPromptBuilder.build(request.question(), retrievedChunks);
+        RagQueryRewriteResult rewrite = ragQueryRewriter.rewrite(request.question());
+        List<RetrievedChunk> retrievedChunks = ragRetriever.retrieve(userId, request.knowledgeBaseId(), rewrite.searchQuery());
+        RagPrompt prompt = ragPromptBuilder.build(request.question(), rewrite.searchQuery(), retrievedChunks);
         List<Long> includedIds = prompt.includedChunks().stream()
                 .map(RetrievedChunk::chunkId)
                 .toList();
@@ -117,8 +131,10 @@ public class QaService {
         return new QaRetrieveResponse(
                 request.knowledgeBaseId(),
                 request.question(),
+                rewrite.searchQuery(),
                 Math.max(ragProperties.getTopK(), 1),
                 Math.max(ragProperties.getMaxContextChars(), 1000),
+                retrievalStrategy(),
                 chunks.size(),
                 includedIds.size(),
                 chunks
@@ -130,9 +146,8 @@ public class QaService {
         CompletableFuture.runAsync(() -> {
             try {
                 send(emitter, "message_start", new QaStreamEventResponse("message_start", request.question()));
-                QaAskResponse response = ask(userId, request);
+                QaAskResponse response = askStreaming(userId, request, emitter);
                 send(emitter, "metadata", response);
-                streamAnswer(emitter, response.answer());
                 send(emitter, "citations", response.citations());
                 send(emitter, "message_end", response.assistantMessageId());
                 emitter.complete();
@@ -176,6 +191,9 @@ public class QaService {
                 citation.getDocumentId(),
                 citation.getChunkId(),
                 citation.getChunkIndex(),
+                chunk.getPageNumber(),
+                chunk.getParserType(),
+                chunk.getOcrConfidence(),
                 citation.getDocumentName(),
                 chunk.getContent(),
                 citation.getContentPreview(),
@@ -198,7 +216,8 @@ public class QaService {
                 null
         );
 
-        List<RetrievedChunk> retrievedChunks = ragRetriever.retrieve(userId, knowledgeBase.getId(), request.question());
+        RagQueryRewriteResult rewrite = ragQueryRewriter.rewrite(request.question());
+        List<RetrievedChunk> retrievedChunks = ragRetriever.retrieve(userId, knowledgeBase.getId(), rewrite.searchQuery());
         if (retrievedChunks.isEmpty()) {
             QaMessageEntity assistantMessage = saveMessage(
                     session,
@@ -217,15 +236,19 @@ public class QaService {
                     userMessage.getId(),
                     assistantMessage.getId(),
                     NO_CONTEXT_ANSWER,
+                    rewrite.searchQuery(),
                     assistantMessage.getModelName(),
                     0,
                     0,
                     0L,
+                    false,
+                    0,
+                    0,
                     List.of()
             );
         }
 
-        RagPrompt prompt = ragPromptBuilder.build(request.question(), retrievedChunks);
+        RagPrompt prompt = ragPromptBuilder.build(request.question(), rewrite.searchQuery(), retrievedChunks);
         long start = System.currentTimeMillis();
         try {
             AiChatResponse aiResponse = aiClient.chat(new AiChatRequest(
@@ -236,33 +259,38 @@ public class QaService {
                     aiProperties.getTemperature()
             ));
             long latencyMs = System.currentTimeMillis() - start;
+            RagAnswer trustedAnswer = ragAnswerValidator.parseAndValidate(aiResponse.content(), prompt);
             QaMessageEntity assistantMessage = saveMessage(
                     session,
                     QaMessageRole.ASSISTANT,
                     QaMessageStatus.SUCCESS,
-                    aiResponse.content(),
+                    trustedAnswer.answer(),
                     aiResponse.model(),
                     aiResponse.promptTokens(),
                     aiResponse.completionTokens(),
                     latencyMs,
                     null
             );
-            List<QaCitationResponse> citations = saveCitations(assistantMessage.getId(), prompt.includedChunks());
+            List<QaCitationResponse> citations = saveCitations(assistantMessage.getId(), trustedAnswer.citedChunks());
             touchSession(session);
             return new QaAskResponse(
                     session.getId(),
                     userMessage.getId(),
                     assistantMessage.getId(),
-                    aiResponse.content(),
+                    trustedAnswer.answer(),
+                    rewrite.searchQuery(),
                     aiResponse.model(),
                     aiResponse.promptTokens(),
                     aiResponse.completionTokens(),
                     latencyMs,
+                    trustedAnswer.structuredOutput(),
+                    citations.size(),
+                    trustedAnswer.rejectedCitationCount(),
                     citations
             );
         } catch (Exception ex) {
             long latencyMs = System.currentTimeMillis() - start;
-            QaMessageEntity failedMessage = saveMessage(
+            saveMessage(
                     session,
                     QaMessageRole.ASSISTANT,
                     QaMessageStatus.FAILED,
@@ -273,13 +301,174 @@ public class QaService {
                     latencyMs,
                     ex.getMessage()
             );
-            saveCitations(failedMessage.getId(), prompt.includedChunks());
             touchSession(session);
             if (ex instanceof BusinessException businessException) {
                 throw businessException;
             }
             throw new BusinessException(502, "AI service failed: " + ex.getMessage());
         }
+    }
+
+    private QaAskResponse askStreaming(Long userId, QaAskRequest request, SseEmitter emitter) {
+        KnowledgeBaseEntity knowledgeBase = knowledgeBaseService.getOwnedActive(userId, request.knowledgeBaseId());
+        QaSessionEntity session = resolveSession(userId, knowledgeBase, request);
+        QaMessageEntity userMessage = saveMessage(
+                session,
+                QaMessageRole.USER,
+                QaMessageStatus.SUCCESS,
+                request.question(),
+                null,
+                null,
+                null,
+                null,
+                null
+        );
+
+        RagQueryRewriteResult rewrite = ragQueryRewriter.rewrite(request.question());
+        List<RetrievedChunk> retrievedChunks = ragRetriever.retrieve(userId, knowledgeBase.getId(), rewrite.searchQuery());
+        if (retrievedChunks.isEmpty()) {
+            QaMessageEntity assistantMessage = saveMessage(
+                    session,
+                    QaMessageRole.ASSISTANT,
+                    QaMessageStatus.SUCCESS,
+                    NO_CONTEXT_ANSWER,
+                    "rule-no-context",
+                    0,
+                    0,
+                    0L,
+                    null
+            );
+            touchSession(session);
+            streamDelta(emitter, NO_CONTEXT_ANSWER);
+            return new QaAskResponse(
+                    session.getId(),
+                    userMessage.getId(),
+                    assistantMessage.getId(),
+                    NO_CONTEXT_ANSWER,
+                    rewrite.searchQuery(),
+                    assistantMessage.getModelName(),
+                    0,
+                    0,
+                    0L,
+                    false,
+                    0,
+                    0,
+                    List.of()
+            );
+        }
+
+        RagPrompt prompt = ragPromptBuilder.build(request.question(), rewrite.searchQuery(), retrievedChunks);
+        StringBuilder rawAnswer = new StringBuilder();
+        AtomicReference<String> modelName = new AtomicReference<>(aiProperties.getModel());
+        AtomicInteger promptTokens = new AtomicInteger(-1);
+        AtomicInteger completionTokens = new AtomicInteger(-1);
+        long start = System.currentTimeMillis();
+        try {
+            AiChatResponse aiResponse = aiClient.streamChat(new AiChatRequest(
+                    prompt.systemPrompt(),
+                    prompt.userPrompt(),
+                    request.question(),
+                    aiProperties.getModel(),
+                    aiProperties.getTemperature()
+            ), chunk -> handleAiStreamChunk(rawAnswer, modelName, promptTokens, completionTokens, chunk));
+            if (rawAnswer.isEmpty() && aiResponse.content() != null) {
+                rawAnswer.append(aiResponse.content());
+            }
+            if (aiResponse.model() != null) {
+                modelName.set(aiResponse.model());
+            }
+            if (aiResponse.promptTokens() != null) {
+                promptTokens.set(aiResponse.promptTokens());
+            }
+            if (aiResponse.completionTokens() != null) {
+                completionTokens.set(aiResponse.completionTokens());
+            }
+            long latencyMs = System.currentTimeMillis() - start;
+            RagAnswer trustedAnswer = ragAnswerValidator.parseAndValidate(rawAnswer.toString(), prompt);
+            streamDelta(emitter, trustedAnswer.answer());
+            QaMessageEntity assistantMessage = saveMessage(
+                    session,
+                    QaMessageRole.ASSISTANT,
+                    QaMessageStatus.SUCCESS,
+                    trustedAnswer.answer(),
+                    modelName.get(),
+                    nullableToken(promptTokens),
+                    nullableToken(completionTokens),
+                    latencyMs,
+                    null
+            );
+            List<QaCitationResponse> citations = saveCitations(assistantMessage.getId(), trustedAnswer.citedChunks());
+            touchSession(session);
+            return new QaAskResponse(
+                    session.getId(),
+                    userMessage.getId(),
+                    assistantMessage.getId(),
+                    trustedAnswer.answer(),
+                    rewrite.searchQuery(),
+                    modelName.get(),
+                    nullableToken(promptTokens),
+                    nullableToken(completionTokens),
+                    latencyMs,
+                    trustedAnswer.structuredOutput(),
+                    citations.size(),
+                    trustedAnswer.rejectedCitationCount(),
+                    citations
+            );
+        } catch (Exception ex) {
+            long latencyMs = System.currentTimeMillis() - start;
+            saveMessage(
+                    session,
+                    QaMessageRole.ASSISTANT,
+                    QaMessageStatus.FAILED,
+                    rawAnswer.isEmpty() ? "AI service failed to generate an answer." : rawAnswer.toString(),
+                    modelName.get(),
+                    nullableToken(promptTokens),
+                    nullableToken(completionTokens),
+                    latencyMs,
+                    ex.getMessage()
+            );
+            touchSession(session);
+            if (ex instanceof BusinessException businessException) {
+                throw businessException;
+            }
+            throw new BusinessException(502, "AI stream service failed: " + ex.getMessage());
+        }
+    }
+
+    private void handleAiStreamChunk(
+            StringBuilder answer,
+            AtomicReference<String> modelName,
+            AtomicInteger promptTokens,
+            AtomicInteger completionTokens,
+            AiStreamChunk chunk
+    ) {
+        if (chunk == null) {
+            return;
+        }
+        if (chunk.model() != null && !chunk.model().isBlank()) {
+            modelName.set(chunk.model());
+        }
+        if (chunk.promptTokens() != null) {
+            promptTokens.set(chunk.promptTokens());
+        }
+        if (chunk.completionTokens() != null) {
+            completionTokens.set(chunk.completionTokens());
+        }
+        if (!chunk.done() && chunk.delta() != null && !chunk.delta().isEmpty()) {
+            answer.append(chunk.delta());
+        }
+    }
+
+    private void streamDelta(SseEmitter emitter, String delta) {
+        try {
+            send(emitter, "delta", new QaStreamEventResponse("delta", delta));
+        } catch (IOException ex) {
+            throw new BusinessException(499, "SSE client disconnected");
+        }
+    }
+
+    private Integer nullableToken(AtomicInteger value) {
+        return value.get() < 0 ? null : value.get();
     }
 
     private QaSessionEntity resolveSession(Long userId, KnowledgeBaseEntity knowledgeBase, QaAskRequest request) {
@@ -355,6 +544,8 @@ public class QaService {
                     citation.setDocumentId(chunk.documentId());
                     citation.setChunkId(chunk.chunkId());
                     citation.setChunkIndex(chunk.chunkIndex());
+                    citation.setPageNumber(chunk.pageNumber());
+                    citation.setParserType(chunk.parserType());
                     citation.setDocumentName(chunk.fileName());
                     citation.setContentPreview(preview(chunk.content(), ragProperties.getCitationPreviewChars()));
                     citation.setScore(chunk.score());
@@ -415,19 +606,13 @@ public class QaService {
         return value.substring(0, Math.max(maxLength - 3, 1)) + "...";
     }
 
-    private void streamAnswer(SseEmitter emitter, String answer) throws IOException, InterruptedException {
-        String safeAnswer = answer == null ? "" : answer;
-        int step = 48;
-        for (int i = 0; i < safeAnswer.length(); i += step) {
-            String delta = safeAnswer.substring(i, Math.min(i + step, safeAnswer.length()));
-            send(emitter, "delta", new QaStreamEventResponse("delta", delta));
-            Thread.sleep(25);
-        }
-    }
-
     private void send(SseEmitter emitter, String eventName, Object data) throws IOException {
         emitter.send(SseEmitter.event()
                 .name(eventName)
                 .data(data));
+    }
+
+    private String retrievalStrategy() {
+        return ragProperties.isHybridEnabled() ? "HYBRID_BM25_VECTOR_RERANK" : "BM25";
     }
 }

@@ -2,6 +2,8 @@ package com.studyflow.common;
 
 import cn.dev33.satoken.exception.NotLoginException;
 import jakarta.validation.ConstraintViolationException;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -11,8 +13,9 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(BusinessException.class)
-    public Result<Void> handleBusinessException(BusinessException ex) {
-        return Result.fail(ex.getCode(), ex.getMessage());
+    public ResponseEntity<Result<Void>> handleBusinessException(BusinessException ex) {
+        HttpStatus status = ex.getCode() == 429 ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.OK;
+        return ResponseEntity.status(status).body(Result.fail(ex.getCode(), ex.getMessage()));
     }
 
     @ExceptionHandler(NotLoginException.class)

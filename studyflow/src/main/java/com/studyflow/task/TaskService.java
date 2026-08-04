@@ -5,6 +5,8 @@ import com.studyflow.common.BusinessException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 @RequiredArgsConstructor
@@ -28,8 +30,21 @@ public class TaskService {
         task.setStartedTime(null);
         task.setFinishedTime(null);
         parseTaskMapper.updateById(task);
-        taskPublisher.publishParseTask(task.getId());
+        publishAfterCommit(task.getId());
         return TaskResponse.from(task);
+    }
+
+    private void publishAfterCommit(Long taskId) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    taskPublisher.publishParseTask(taskId);
+                }
+            });
+        } else {
+            taskPublisher.publishParseTask(taskId);
+        }
     }
 
     private ParseTaskEntity getOwnedTask(Long userId, Long taskId) {

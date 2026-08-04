@@ -20,6 +20,12 @@ public class DocumentChunkEntity {
     private Integer chunkIndex;
     private String content;
     private Integer charCount;
+    private Integer pageNumber;
+    private String parserType;
+    private Double ocrConfidence;
+    private String embedding;
+    private String embeddingModel;
+    private Integer embeddingDim;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;

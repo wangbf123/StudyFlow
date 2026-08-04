@@ -11,7 +11,11 @@ import com.studyflow.document.DocumentEntity;
 import com.studyflow.document.DocumentMapper;
 import com.studyflow.document.DocumentStatus;
 import com.studyflow.document.parser.DocumentTextParser;
+import com.studyflow.document.parser.ParsedDocument;
 import com.studyflow.document.parser.TextChunker;
+import com.studyflow.embedding.EmbeddingClient;
+import com.studyflow.embedding.EmbeddingProperties;
+import com.studyflow.embedding.EmbeddingVectorCodec;
 import com.studyflow.search.SearchService;
 import com.studyflow.storage.StorageService;
 import lombok.RequiredArgsConstructor;
@@ -39,19 +43,22 @@ public class DocumentParseService {
     private final DocumentTextParser documentTextParser;
     private final TextChunker textChunker;
     private final AiClient aiClient;
+    private final EmbeddingClient embeddingClient;
+    private final EmbeddingProperties embeddingProperties;
+    private final EmbeddingVectorCodec embeddingVectorCodec;
     private final SearchService searchService;
     private final RedissonClient redissonClient;
 
     @Transactional
-    public void parse(Long taskId) {
+    public ParseTaskResult parse(Long taskId) {
         ParseTaskEntity task = parseTaskMapper.selectById(taskId);
         if (task == null) {
             log.warn("Parse task not found: {}", taskId);
-            return;
+            return new ParseTaskResult(taskId, TaskStatus.FAILED);
         }
         if (!List.of(TaskStatus.PENDING, TaskStatus.RETRYING).contains(task.getStatus())) {
             log.info("Skip parse task {}, status={}", taskId, task.getStatus());
-            return;
+            return new ParseTaskResult(taskId, task.getStatus());
         }
 
         try {
@@ -69,18 +76,30 @@ public class DocumentParseService {
                 DocumentEntity reusable = findReusableParsedDocument(document);
                 if (reusable != null) {
                     copyParsedResult(document, task, reusable);
-                    return;
+                    return new ParseTaskResult(taskId, task.getStatus());
                 }
 
                 byte[] bytes = storageService.getObject(document.getObjectKey());
-                String text = documentTextParser.parse(document.getOriginalFileName(), document.getFileType(), bytes);
-                List<String> chunks = textChunker.chunk(text);
-                List<DocumentChunkEntity> savedChunks = refreshChunks(document, chunks);
+                ParsedDocument parsedDocument = documentTextParser.parseDocument(
+                        document.getOriginalFileName(), document.getFileType(), bytes);
+                List<TextChunker.ParsedChunk> parsedChunks = textChunker.chunkDocument(parsedDocument);
+                if (parsedChunks.isEmpty()) {
+                    throw new IllegalStateException("未解析到有效文本分片");
+                }
+                List<String> chunkContents = parsedChunks.stream()
+                        .map(TextChunker.ParsedChunk::content)
+                        .toList();
+                List<List<Double>> embeddings = createEmbeddings(chunkContents);
+                List<DocumentChunkEntity> savedChunks = refreshChunks(document, parsedChunks, embeddings);
 
-                AiResult aiResult = aiClient.summarize(document.getOriginalFileName(), String.join("\n", chunks));
+                AiResult aiResult = aiClient.summarize(document.getOriginalFileName(), String.join("\n", chunkContents));
                 saveSummary(document, aiResult);
 
                 document.setParseStatus(DocumentStatus.SUCCESS);
+                document.setParserType(parsedDocument.parserType());
+                document.setPageCount(parsedDocument.pageCount());
+                document.setOcrPageCount(parsedDocument.ocrPageCount());
+                document.setOcrElapsedMs(parsedDocument.ocrElapsedMs());
                 document.setSummary(aiResult.summary());
                 documentMapper.updateById(document);
                 searchService.indexChunks(document, savedChunks);
@@ -97,6 +116,7 @@ public class DocumentParseService {
         } catch (Exception ex) {
             markFailed(task, ex);
         }
+        return new ParseTaskResult(taskId, task.getStatus());
     }
 
     private void markProcessing(ParseTaskEntity task) {
@@ -112,7 +132,11 @@ public class DocumentParseService {
         }
     }
 
-    private List<DocumentChunkEntity> refreshChunks(DocumentEntity document, List<String> chunks) {
+    private List<DocumentChunkEntity> refreshChunks(
+            DocumentEntity document,
+            List<TextChunker.ParsedChunk> chunks,
+            List<List<Double>> embeddings
+    ) {
         documentChunkMapper.delete(Wrappers.<DocumentChunkEntity>lambdaQuery()
                 .eq(DocumentChunkEntity::getDocumentId, document.getId()));
         List<DocumentChunkEntity> savedChunks = new ArrayList<>();
@@ -122,12 +146,42 @@ public class DocumentParseService {
             chunk.setKnowledgeBaseId(document.getKnowledgeBaseId());
             chunk.setUserId(document.getUserId());
             chunk.setChunkIndex(i);
-            chunk.setContent(chunks.get(i));
-            chunk.setCharCount(chunks.get(i).length());
+            TextChunker.ParsedChunk parsedChunk = chunks.get(i);
+            chunk.setContent(parsedChunk.content());
+            chunk.setCharCount(parsedChunk.content().length());
+            chunk.setPageNumber(parsedChunk.pageNumber());
+            chunk.setParserType(parsedChunk.parserType());
+            chunk.setOcrConfidence(parsedChunk.ocrConfidence());
+            applyEmbedding(chunk, embeddings, i);
             documentChunkMapper.insert(chunk);
             savedChunks.add(chunk);
         }
         return savedChunks;
+    }
+
+    private List<List<Double>> createEmbeddings(List<String> chunks) {
+        if (!embeddingProperties.isEnabled() || chunks == null || chunks.isEmpty()) {
+            return List.of();
+        }
+        List<List<Double>> embeddings = embeddingClient.embedBatch(chunks);
+        if (embeddings.size() != chunks.size()) {
+            throw new IllegalStateException("Embedding count mismatch: expected "
+                    + chunks.size() + ", got " + embeddings.size());
+        }
+        return embeddings;
+    }
+
+    private void applyEmbedding(DocumentChunkEntity chunk, List<List<Double>> embeddings, int index) {
+        if (embeddings == null || embeddings.isEmpty() || index >= embeddings.size()) {
+            return;
+        }
+        List<Double> vector = embeddings.get(index);
+        if (vector == null || vector.isEmpty()) {
+            return;
+        }
+        chunk.setEmbedding(embeddingVectorCodec.encode(vector));
+        chunk.setEmbeddingModel(embeddingClient.model());
+        chunk.setEmbeddingDim(vector.size());
     }
 
     private DocumentEntity findReusableParsedDocument(DocumentEntity current) {
@@ -152,6 +206,12 @@ public class DocumentParseService {
                     targetChunk.setChunkIndex(sourceChunk.getChunkIndex());
                     targetChunk.setContent(sourceChunk.getContent());
                     targetChunk.setCharCount(sourceChunk.getCharCount());
+                    targetChunk.setPageNumber(sourceChunk.getPageNumber());
+                    targetChunk.setParserType(sourceChunk.getParserType());
+                    targetChunk.setOcrConfidence(sourceChunk.getOcrConfidence());
+                    targetChunk.setEmbedding(sourceChunk.getEmbedding());
+                    targetChunk.setEmbeddingModel(sourceChunk.getEmbeddingModel());
+                    targetChunk.setEmbeddingDim(sourceChunk.getEmbeddingDim());
                     documentChunkMapper.insert(targetChunk);
                     return targetChunk;
                 })
@@ -170,6 +230,10 @@ public class DocumentParseService {
         }
 
         document.setParseStatus(DocumentStatus.SUCCESS);
+        document.setParserType(reusable.getParserType());
+        document.setPageCount(reusable.getPageCount());
+        document.setOcrPageCount(reusable.getOcrPageCount());
+        document.setOcrElapsedMs(reusable.getOcrElapsedMs());
         document.setSummary(sourceSummary == null ? reusable.getSummary() : sourceSummary.getSummary());
         documentMapper.updateById(document);
         searchService.indexChunks(document, copiedChunks);
@@ -210,7 +274,7 @@ public class DocumentParseService {
 
         DocumentEntity document = documentMapper.selectById(task.getDocumentId());
         if (document != null) {
-            document.setParseStatus(DocumentStatus.FAILED);
+            document.setParseStatus(TaskStatus.FAILED.equals(task.getStatus()) ? DocumentStatus.FAILED : DocumentStatus.PENDING);
             documentMapper.updateById(document);
         }
     }

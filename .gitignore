@@ -12,6 +12,7 @@ studyflow-web/.npm-cache/
 studyflow-web/logs/
 
 # IDE / OS
+.claude/
 .idea/
 *.iml
 .DS_Store
@@ -25,3 +26,8 @@ application-dev.yml
 
 # Runtime data
 **/*.data
+
+# Load-test outputs
+studyflow/*.jtl
+studyflow/load-test/
+studyflow/test-rocketmq.txt

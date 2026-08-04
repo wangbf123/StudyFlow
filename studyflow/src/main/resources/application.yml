@@ -59,10 +59,10 @@ rocketmq:
 
 studyflow:
   mq:
-    # async: no RocketMQ required, good for first local smoke tests.
-    # rocketmq: use RocketMQ producer/listener.
-    mode: async
-    parse-topic: studyflow-parse-task
+    # rocketmq: upload creates parse_task, producer sends task id, listener consumes and parses.
+    # async: local fallback without RocketMQ.
+    mode: ${STUDYFLOW_MQ_MODE:rocketmq}
+    parse-topic: ${STUDYFLOW_PARSE_TOPIC:studyflow-parse-task}
   minio:
     endpoint: http://localhost:9000
     access-key: studyflow
@@ -71,8 +71,16 @@ studyflow:
   document:
     chunk-size: 1000
     chunk-overlap: 120
+  ocr:
+    # Normal text PDFs stay on PDFBox; only images and low-text PDF pages call PaddleOCR.
+    enabled: ${STUDYFLOW_OCR_ENABLED:true}
+    base-url: ${STUDYFLOW_OCR_BASE_URL:http://localhost:8866}
+    connect-timeout-seconds: ${STUDYFLOW_OCR_CONNECT_TIMEOUT_SECONDS:5}
+    read-timeout-seconds: ${STUDYFLOW_OCR_READ_TIMEOUT_SECONDS:180}
+    min-text-chars-per-page: ${STUDYFLOW_OCR_MIN_TEXT_CHARS_PER_PAGE:40}
+    max-pages: ${STUDYFLOW_OCR_MAX_PAGES:100}
   ai:
-    # mock: no API key required, keeps the whole RAG flow runnable for interviews.
+    # mock: no API key required, keeps the whole RAG flow runnable locally.
     # openai-compatible: use any chat-completions compatible provider.
     provider: ${STUDYFLOW_AI_PROVIDER:mock}
     base-url: ${STUDYFLOW_AI_BASE_URL:}
@@ -80,15 +88,49 @@ studyflow:
     model: ${STUDYFLOW_AI_MODEL:mock-rag}
     timeout-seconds: 60
     temperature: 0.2
+  embedding:
+    enabled: ${STUDYFLOW_EMBEDDING_ENABLED:true}
+    # mock: deterministic local vectors for development and tests.
+    # openai-compatible: calls /embeddings on the configured provider.
+    provider: ${STUDYFLOW_EMBEDDING_PROVIDER:mock}
+    base-url: ${STUDYFLOW_EMBEDDING_BASE_URL:}
+    api-key: ${STUDYFLOW_EMBEDDING_API_KEY:}
+    model: ${STUDYFLOW_EMBEDDING_MODEL:mock-embedding}
+    dimension: ${STUDYFLOW_EMBEDDING_DIMENSION:256}
+    batch-size: 16
+    max-input-chars: 8000
+    timeout-seconds: 60
   rag:
     top-k: 6
     max-context-chars: 6000
     citation-preview-chars: 300
+    query-rewrite-enabled: true
+    query-rewrite-max-chars: 240
+    max-validated-citations: 6
+    hybrid-enabled: true
+    bm25-candidate-size: 40
+    vector-candidate-size: 40
+    vector-scan-limit: 1000
+    bm25-weight: 0.45
+    vector-weight: 0.45
+    rerank-weight: 0.10
+  agent:
+    enabled: ${STUDYFLOW_AGENT_ENABLED:true}
+    # Hard limits keep the model-controlled loop bounded and observable.
+    max-steps: ${STUDYFLOW_AGENT_MAX_STEPS:6}
+    max-history-messages: 8
+    max-tool-result-chars: 12000
+    max-sources: 12
+    max-read-chunks: 8
   rate-limit:
     enabled: true
+    # Token bucket: capacity is max burst tokens; window-seconds is the time to refill capacity tokens.
     rules:
       - pattern: /api/documents/upload
         capacity: 5
+        window-seconds: 60
+      - pattern: /api/uploads
+        capacity: 120
         window-seconds: 60
       - pattern: /api/search
         capacity: 60
@@ -98,6 +140,9 @@ studyflow:
         window-seconds: 60
       - pattern: /api/qa/retrieve
         capacity: 60
+        window-seconds: 60
+      - pattern: /api/agent/runs
+        capacity: 12
         window-seconds: 60
 
 springdoc:

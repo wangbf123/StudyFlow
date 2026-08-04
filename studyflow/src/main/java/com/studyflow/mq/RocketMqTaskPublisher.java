@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 @RequiredArgsConstructor
-@ConditionalOnProperty(prefix = "studyflow.mq", name = "mode", havingValue = "rocketmq")
+@ConditionalOnProperty(prefix = "studyflow.mq", name = "mode", havingValue = "rocketmq", matchIfMissing = true)
 public class RocketMqTaskPublisher implements TaskPublisher {
 
     private final RocketMQTemplate rocketMQTemplate;

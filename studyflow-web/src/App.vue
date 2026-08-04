@@ -12,7 +12,7 @@ import {
   Send,
   UploadCloud
 } from 'lucide-vue-next'
-import { api, clearToken, getToken, saveToken, streamAsk } from './api'
+import { api, clearToken, getToken, saveToken, streamAgent, streamAsk } from './api'
 
 const authenticated = ref(Boolean(getToken()))
 const currentUser = ref(null)
@@ -22,6 +22,9 @@ const appLoading = ref(false)
 const uploadLoading = ref(false)
 const askLoading = ref(false)
 const streamLoading = ref(false)
+const agentLoading = ref(false)
+const uploadProgress = ref(0)
+const uploadStatus = ref('')
 
 const authForm = reactive({
   username: 'test001',
@@ -42,6 +45,10 @@ const qaForm = reactive({
   question: 'Redis 为什么快？StudyFlow 里 Redis 用来做什么？'
 })
 
+const agentForm = reactive({
+  goal: '梳理这个知识库的核心知识，指出最值得优先复习的内容，并给出一份可执行的学习计划。'
+})
+
 const knowledgeBases = ref([])
 const selectedKbId = ref(null)
 const documents = ref([])
@@ -56,6 +63,12 @@ const streamAnswer = ref('')
 const streamMeta = ref(null)
 const citationDrawerVisible = ref(false)
 const citationDetail = ref(null)
+const agentSessions = ref([])
+const selectedAgentSessionId = ref(null)
+const agentRuns = ref([])
+const selectedAgentRun = ref(null)
+const agentSteps = ref([])
+const uploadChunkSize = 5 * 1024 * 1024
 
 const selectedKb = computed(() => knowledgeBases.value.find((item) => item.id === selectedKbId.value))
 const canUseKb = computed(() => Boolean(selectedKbId.value))
@@ -124,7 +137,7 @@ async function loadKnowledgeBases() {
     selectedKbId.value = knowledgeBases.value[0].id
   }
   if (selectedKbId.value) {
-    await Promise.all([loadDocuments(), loadSessions()])
+    await Promise.all([loadDocuments(), loadSessions(), loadAgentSessions()])
   }
 }
 
@@ -154,7 +167,11 @@ async function selectKnowledgeBase(id) {
   retrieveResult.value = null
   messages.value = []
   selectedSessionId.value = null
-  await Promise.all([loadDocuments(), loadSessions()])
+  selectedAgentSessionId.value = null
+  agentRuns.value = []
+  selectedAgentRun.value = null
+  agentSteps.value = []
+  await Promise.all([loadDocuments(), loadSessions(), loadAgentSessions()])
 }
 
 async function loadDocuments() {
@@ -164,6 +181,8 @@ async function loadDocuments() {
 
 function onFileChange(file) {
   uploadFile.value = file.raw
+  uploadProgress.value = 0
+  uploadStatus.value = ''
 }
 
 async function uploadDocument() {
@@ -173,11 +192,10 @@ async function uploadDocument() {
   }
   try {
     uploadLoading.value = true
-    const formData = new FormData()
-    formData.append('file', uploadFile.value)
-    const result = await api.post(`/api/documents/upload?knowledgeBaseId=${selectedKbId.value}`, formData)
+    const result = await uploadDocumentByChunks(uploadFile.value)
     await waitTask(result.taskId)
     await loadDocuments()
+    uploadProgress.value = 100
     ElMessage.success('解析完成')
   } catch (error) {
     ElMessage.error(error.message)
@@ -185,6 +203,89 @@ async function uploadDocument() {
     uploadLoading.value = false
     uploadFile.value = null
   }
+}
+
+async function uploadDocumentByChunks(file) {
+  const totalParts = Math.ceil(file.size / uploadChunkSize)
+  uploadStatus.value = 'INIT'
+  const resumeKey = uploadResumeKey(file)
+  let init = await loadUploadProgress(resumeKey, file, totalParts)
+  if (!init) {
+    init = await api.post('/api/uploads/init', {
+      knowledgeBaseId: selectedKbId.value,
+      fileName: file.name,
+      fileSize: file.size,
+      chunkSize: uploadChunkSize,
+      totalParts
+    })
+    if (init.uploadId) {
+      localStorage.setItem(resumeKey, init.uploadId)
+    }
+  }
+
+  if (init.instantUploaded && init.document) {
+    uploadStatus.value = 'COMPLETED'
+    uploadProgress.value = 100
+    localStorage.removeItem(resumeKey)
+    return init.document
+  }
+
+  const uploadId = init.uploadId
+  const uploadedParts = new Set(init.uploadedParts || [])
+  uploadProgress.value = init.progress || 0
+  uploadStatus.value = init.status || 'UPLOADING'
+
+  for (let partNumber = 1; partNumber <= init.totalParts; partNumber += 1) {
+    if (uploadedParts.has(partNumber)) {
+      continue
+    }
+    const start = (partNumber - 1) * init.chunkSize
+    const end = Math.min(file.size, start + init.chunkSize)
+    const chunk = file.slice(start, end)
+    const formData = new FormData()
+    formData.append('partNumber', String(partNumber))
+    formData.append('file', chunk, file.name)
+    const partResult = await api.post(`/api/uploads/${uploadId}/parts`, formData)
+    ;(partResult.uploadedParts || []).forEach((item) => uploadedParts.add(item))
+    uploadProgress.value = partResult.progress || Math.floor((uploadedParts.size * 100) / init.totalParts)
+    uploadStatus.value = 'UPLOADING'
+  }
+
+  uploadStatus.value = 'MERGING'
+  const completed = await api.post(`/api/uploads/${uploadId}/complete`)
+  uploadProgress.value = 100
+  uploadStatus.value = 'COMPLETED'
+  localStorage.removeItem(resumeKey)
+  return completed
+}
+
+async function loadUploadProgress(resumeKey, file, totalParts) {
+  const uploadId = localStorage.getItem(resumeKey)
+  if (!uploadId) return null
+  try {
+    const progress = await api.get(`/api/uploads/${uploadId}/parts`)
+    if (progress.fileSize !== file.size || progress.totalParts !== totalParts) {
+      localStorage.removeItem(resumeKey)
+      return null
+    }
+    return {
+      uploadId,
+      status: progress.status,
+      chunkSize: progress.chunkSize,
+      totalParts: progress.totalParts,
+      uploadedParts: progress.uploadedParts || [],
+      progress: progress.progress || 0,
+      instantUploaded: false,
+      document: progress.document
+    }
+  } catch {
+    localStorage.removeItem(resumeKey)
+    return null
+  }
+}
+
+function uploadResumeKey(file) {
+  return `studyflow_upload:${selectedKbId.value}:${file.name}:${file.size}:${file.lastModified || 0}`
 }
 
 async function waitTask(taskId) {
@@ -296,6 +397,75 @@ async function openCitation(citationId) {
   }
 }
 
+async function loadAgentSessions() {
+  if (!selectedKbId.value) return
+  agentSessions.value = await api.get('/api/agent/sessions', {
+    params: { knowledgeBaseId: selectedKbId.value }
+  })
+}
+
+async function loadAgentRuns(sessionId) {
+  if (!sessionId) return
+  selectedAgentSessionId.value = sessionId
+  agentRuns.value = await api.get(`/api/agent/sessions/${sessionId}/runs`)
+  if (agentRuns.value.length) {
+    selectAgentRun(agentRuns.value[0])
+  } else {
+    selectedAgentRun.value = null
+    agentSteps.value = []
+  }
+}
+
+function selectAgentRun(run) {
+  selectedAgentRun.value = run
+  agentSteps.value = run?.steps || []
+}
+
+async function runAgent() {
+  if (!canUseKb.value || !agentForm.goal.trim()) return
+  try {
+    agentLoading.value = true
+    selectedAgentRun.value = null
+    agentSteps.value = []
+    await streamAgent(
+      {
+        knowledgeBaseId: selectedKbId.value,
+        sessionId: selectedAgentSessionId.value,
+        goal: agentForm.goal.trim()
+      },
+      (event) => {
+        if (event.event === 'run_start') {
+          selectedAgentSessionId.value = event.data.sessionId
+        }
+        if (event.event === 'step') {
+          agentSteps.value.push(event.data)
+        }
+        if (event.event === 'run_end') {
+          selectedAgentRun.value = event.data
+          agentSteps.value = event.data.steps || agentSteps.value
+        }
+        if (event.event === 'error') {
+          ElMessage.error(event.data?.message || 'Agent 执行失败')
+        }
+      }
+    )
+    await Promise.all([loadAgentSessions(), loadAgentRuns(selectedAgentSessionId.value)])
+  } catch (error) {
+    ElMessage.error(error.message)
+  } finally {
+    agentLoading.value = false
+  }
+}
+
+function prettyJson(value) {
+  if (!value) return ''
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2)
+  } catch {
+    return value
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -396,11 +566,24 @@ function statusType(status) {
               <h3>文档</h3>
               <el-button :icon="RefreshCw" @click="loadDocuments">刷新</el-button>
             </div>
+            <div class="ocr-note">
+              <strong>PaddleOCR 已接入</strong>
+              <span>普通 PDF 使用 PDFBox；扫描页与 JPG/PNG/WebP 自动走 OCR，并保留页码与置信度。</span>
+            </div>
             <div class="upload-row">
-              <el-upload :auto-upload="false" :limit="1" :on-change="onFileChange">
+              <el-upload
+                :auto-upload="false"
+                :limit="1"
+                accept=".pdf,.txt,.md,.markdown,.jpg,.jpeg,.png,.webp"
+                :on-change="onFileChange"
+              >
                 <el-button :icon="UploadCloud">选择文件</el-button>
               </el-upload>
               <el-button type="primary" :loading="uploadLoading" @click="uploadDocument">上传并解析</el-button>
+            </div>
+            <div v-if="uploadLoading || uploadProgress > 0" class="upload-progress">
+              <el-progress :percentage="uploadProgress" />
+              <span>{{ uploadStatus || 'READY' }}</span>
             </div>
             <el-table :data="documents" height="420">
               <el-table-column prop="originalFileName" label="文件名" min-width="210" />
@@ -408,6 +591,20 @@ function statusType(status) {
               <el-table-column label="状态" width="120">
                 <template #default="{ row }">
                   <el-tag :type="statusType(row.parseStatus)">{{ row.parseStatus }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="解析方式" width="150">
+                <template #default="{ row }">
+                  <el-tag v-if="row.parserType" :type="row.ocrPageCount > 0 ? 'warning' : 'info'">
+                    {{ row.parserType }}
+                  </el-tag>
+                  <span v-else>-</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="页数 / OCR" width="130">
+                <template #default="{ row }">
+                  {{ row.pageCount ?? '-' }} / {{ row.ocrPageCount ?? 0 }}
+                  <small v-if="row.ocrElapsedMs"> · {{ row.ocrElapsedMs }}ms</small>
                 </template>
               </el-table-column>
               <el-table-column prop="summary" label="摘要" min-width="260" show-overflow-tooltip />
@@ -431,7 +628,17 @@ function statusType(status) {
                   <FileSearch :size="16" />
                   <strong>{{ item.fileName }}</strong>
                   <span>chunk {{ item.chunkIndex }}</span>
+                  <span v-if="item.pageNumber">第 {{ item.pageNumber }} 页</span>
+                  <span v-if="item.parserType">{{ item.parserType }}</span>
+                  <span v-if="item.ocrConfidence != null">OCR {{ Number(item.ocrConfidence).toFixed(2) }}</span>
                   <span>score {{ Number(item.score || 0).toFixed(2) }}</span>
+                  <span>{{ item.source || 'BM25' }}</span>
+                </div>
+                <div class="score-row">
+                  <span>BM25 {{ Number(item.bm25Score || 0).toFixed(2) }}</span>
+                  <span>Vector {{ item.vectorScore == null ? '-' : Number(item.vectorScore).toFixed(2) }}</span>
+                  <span>Rerank {{ Number(item.rerankScore || 0).toFixed(2) }}</span>
+                  <span>{{ item.hasEmbedding ? item.embeddingModel || 'embedding' : 'no embedding' }}</span>
                 </div>
                 <p>{{ item.content }}</p>
               </article>
@@ -483,7 +690,7 @@ function statusType(status) {
                       class="citation-chip"
                       @click="openCitation(citation.citationId)"
                     >
-                      {{ citation.documentName }} / {{ citation.chunkIndex }}
+                      {{ citation.documentName }} / {{ citation.pageNumber ? `第 ${citation.pageNumber} 页` : `chunk ${citation.chunkIndex}` }}
                     </button>
                   </div>
                 </article>
@@ -493,17 +700,109 @@ function statusType(status) {
             <div class="panel retrieve">
               <div class="panel-head">
                 <h3>召回</h3>
-                <span v-if="retrieveResult">{{ retrieveResult.includedCount }}/{{ retrieveResult.hitCount }}</span>
+                <span v-if="retrieveResult">{{ retrieveResult.strategy }} · {{ retrieveResult.includedCount }}/{{ retrieveResult.hitCount }}</span>
               </div>
               <article v-for="chunk in retrieveResult?.chunks || []" :key="chunk.chunkId" class="chunk-item">
                 <div class="result-meta">
                   <strong>{{ chunk.documentName }}</strong>
+                  <span v-if="chunk.pageNumber">第 {{ chunk.pageNumber }} 页</span>
+                  <span v-if="chunk.parserType">{{ chunk.parserType }}</span>
+                  <span v-if="chunk.ocrConfidence != null">OCR {{ Number(chunk.ocrConfidence).toFixed(2) }}</span>
                   <el-tag size="small" :type="chunk.included ? 'success' : 'info'">
                     {{ chunk.included ? 'included' : 'skipped' }}
                   </el-tag>
+                  <span>{{ chunk.source || 'BM25' }}</span>
+                </div>
+                <div class="score-row">
+                  <span>Final {{ Number(chunk.score || 0).toFixed(2) }}</span>
+                  <span>BM25 {{ Number(chunk.bm25Score || 0).toFixed(2) }}</span>
+                  <span>Vector {{ chunk.vectorScore == null ? '-' : Number(chunk.vectorScore).toFixed(2) }}</span>
+                  <span>Rerank {{ Number(chunk.rerankScore || 0).toFixed(2) }}</span>
                 </div>
                 <p>{{ chunk.content }}</p>
               </article>
+            </div>
+          </section>
+        </el-tab-pane>
+        <el-tab-pane label="学习 Agent" name="agent">
+          <section class="agent-layout">
+            <div class="panel agent-sessions">
+              <div class="panel-head">
+                <h3>Agent 会话</h3>
+                <el-button :icon="RefreshCw" circle @click="loadAgentSessions" />
+              </div>
+              <button v-for="session in agentSessions" :key="session.id" class="session-item"
+                :class="{ active: session.id === selectedAgentSessionId }" @click="loadAgentRuns(session.id)">
+                {{ session.title }}
+              </button>
+              <el-divider v-if="agentRuns.length" content-position="left">运行记录</el-divider>
+              <button v-for="run in agentRuns" :key="run.id" class="agent-run-item"
+                :class="{ active: run.id === selectedAgentRun?.id }" @click="selectAgentRun(run)">
+                <span>#{{ run.id }}</span>
+                <el-tag size="small" :type="statusType(run.status)">{{ run.status }}</el-tag>
+              </button>
+            </div>
+
+            <div class="panel agent-main">
+              <div class="agent-hero">
+                <div class="brand-mark small"><Bot :size="20" /></div>
+                <div>
+                  <h3>StudyFlow Learning Agent</h3>
+                  <p>自主选择检索、资料列表和文档读取工具，并保留完整执行轨迹。</p>
+                </div>
+              </div>
+              <div class="ask-box">
+                <el-input v-model="agentForm.goal" type="textarea" :rows="4" resize="vertical"
+                  placeholder="描述学习目标，而不只是提出一个事实问题" />
+                <div class="ask-actions">
+                  <el-button type="primary" :icon="Send" :loading="agentLoading" @click="runAgent">
+                    {{ agentLoading ? 'Agent 执行中' : '运行 Agent' }}
+                  </el-button>
+                  <span class="agent-hint">最多 6 步 · 工具白名单 · 全程可追踪</span>
+                </div>
+              </div>
+
+              <div v-if="selectedAgentRun" class="agent-answer">
+                <div class="agent-answer-head">
+                  <span class="message-role">FINAL</span>
+                  <span>{{ selectedAgentRun.modelName }} · {{ selectedAgentRun.latencyMs }} ms · {{ selectedAgentRun.totalSteps }} steps</span>
+                </div>
+                <p>{{ selectedAgentRun.finalAnswer }}</p>
+                <div v-if="selectedAgentRun.sources?.length" class="agent-sources">
+                  <article v-for="source in selectedAgentRun.sources" :key="source.chunkId" class="agent-source-card">
+                    <strong>[C{{ source.chunkId }}] {{ source.documentName }}</strong>
+                    <span>chunk {{ source.chunkIndex }} · score {{ Number(source.score || 0).toFixed(2) }}</span>
+                    <p>{{ source.contentPreview }}</p>
+                  </article>
+                </div>
+              </div>
+              <el-empty v-else-if="!agentLoading" description="输入学习目标，让 Agent 开始工作" />
+            </div>
+
+            <div class="panel agent-trace">
+              <div class="panel-head">
+                <h3>执行轨迹</h3>
+                <span>{{ agentSteps.length }} steps</span>
+              </div>
+              <el-timeline v-if="agentSteps.length">
+                <el-timeline-item v-for="step in agentSteps" :key="step.id || step.stepNo"
+                  :type="statusType(step.status)" :timestamp="`${step.latencyMs || 0} ms`">
+                  <div class="trace-step">
+                    <div>
+                      <strong>Step {{ step.stepNo }} · {{ step.toolName || step.stepType }}</strong>
+                      <el-tag size="small" :type="statusType(step.status)">{{ step.status }}</el-tag>
+                    </div>
+                    <p>{{ step.reasoningSummary || step.errorMessage }}</p>
+                    <el-collapse v-if="step.inputJson || step.outputJson">
+                      <el-collapse-item title="查看参数与结果">
+                        <pre v-if="step.inputJson">{{ prettyJson(step.inputJson) }}</pre>
+                        <pre v-if="step.outputJson">{{ prettyJson(step.outputJson) }}</pre>
+                      </el-collapse-item>
+                    </el-collapse>
+                  </div>
+                </el-timeline-item>
+              </el-timeline>
+              <el-empty v-else description="等待 Agent 步骤" :image-size="70" />
             </div>
           </section>
         </el-tab-pane>
@@ -513,7 +812,14 @@ function statusType(status) {
     <el-drawer v-model="citationDrawerVisible" title="引用原文" size="42%">
       <div v-if="citationDetail" class="citation-detail">
         <h3>{{ citationDetail.documentName }}</h3>
-        <p>chunk {{ citationDetail.chunkIndex }} / score {{ Number(citationDetail.score || 0).toFixed(2) }}</p>
+        <p>
+          {{ citationDetail.pageNumber ? `第 ${citationDetail.pageNumber} 页` : `chunk ${citationDetail.chunkIndex}` }}
+          / {{ citationDetail.parserType || 'TEXT' }}
+          <span v-if="citationDetail.ocrConfidence != null">
+            / OCR {{ Number(citationDetail.ocrConfidence).toFixed(2) }}
+          </span>
+          / score {{ Number(citationDetail.score || 0).toFixed(2) }}
+        </p>
         <pre>{{ citationDetail.content }}</pre>
       </div>
     </el-drawer>
