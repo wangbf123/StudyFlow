@@ -1,0 +1,1944 @@
+{
+  "generated_at_utc": "2026-10-09T08:26:17.993904+00:00",
+  "status": "MEASURED",
+  "dataset_sha256": "3dcc9d92c414dfaa3b6b3f89257f494319e42e81f6aed5a18c2e199bdfc4be2e",
+  "dataset_purpose": "可运行的中文检索示例评测。笔记和问题由项目实现时编写并显式标注，尚未经独立人工复核；不是真实学生查询集，不用于承诺线上提升。",
+  "scope": "ES native retrieval and identical fusion formula; not Java end-to-end",
+  "model": "BAAI/bge-small-zh-v1.5@7999e1d3359715c523056ef9478215996d62a620",
+  "elasticsearch_version": "8.15.3",
+  "corpus_size": 24,
+  "question_count": 22,
+  "split": "test",
+  "top_k": 5,
+  "candidates": 40,
+  "knn_candidates": 200,
+  "rrf_constant": 60,
+  "modes": {
+    "BM25": {
+      "recall": 0.9090909090909091,
+      "mrr": 0.8787878787878788,
+      "ndcg": 0.8795611320697616,
+      "latency_p50_ms": 11.572292000209927,
+      "latency_p95_ms": 20.69593700025507,
+      "latency_samples": 44
+    },
+    "VECTOR": {
+      "recall": 0.9090909090909091,
+      "mrr": 0.7651515151515151,
+      "ndcg": 0.802484034902604,
+      "latency_p50_ms": 48.226704500166306,
+      "latency_p95_ms": 77.31502199976603,
+      "latency_samples": 44
+    },
+    "RRF": {
+      "recall": 1.0,
+      "mrr": 0.8977272727272727,
+      "ndcg": 0.9237939008539894,
+      "latency_p50_ms": 52.63151150006706,
+      "latency_p95_ms": 76.17420500037042,
+      "latency_samples": 44
+    },
+    "RRF_LEXICAL": {
+      "recall": 1.0,
+      "mrr": 0.9204545454545454,
+      "ndcg": 0.9405698211461958,
+      "latency_p50_ms": 57.34069000004638,
+      "latency_p95_ms": 107.92970900001819,
+      "latency_samples": 44
+    },
+    "LEGACY": {
+      "recall": 0.8863636363636364,
+      "mrr": 0.875,
+      "ndcg": 0.8619792972721382,
+      "latency_p50_ms": 29.552076000072702,
+      "latency_p95_ms": 36.346867000247585,
+      "latency_samples": 44
+    }
+  },
+  "rows": [
+    {
+      "question_id": "q01",
+      "mode": "BM25",
+      "ranking": [
+        1,
+        6,
+        22,
+        15,
+        7
+      ],
+      "gold": [
+        1
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q02",
+      "mode": "BM25",
+      "ranking": [
+        2,
+        15,
+        11,
+        6,
+        13
+      ],
+      "gold": [
+        2
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q03",
+      "mode": "BM25",
+      "ranking": [
+        8,
+        5,
+        3,
+        17,
+        9
+      ],
+      "gold": [
+        3
+      ],
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
+    },
+    {
+      "question_id": "q04",
+      "mode": "BM25",
+      "ranking": [
+        4,
+        2,
+        5,
+        19,
+        11
+      ],
+      "gold": [
+        4,
+        11
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 0.8503449055347546
+    },
+    {
+      "question_id": "q05",
+      "mode": "BM25",
+      "ranking": [
+        5,
+        11,
+        1,
+        4,
+        2
+      ],
+      "gold": [
+        5
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q06",
+      "mode": "BM25",
+      "ranking": [
+        6,
+        4,
+        11,
+        3,
+        10
+      ],
+      "gold": [
+        6
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q07",
+      "mode": "BM25",
+      "ranking": [
+        7,
+        9,
+        11,
+        2,
+        6
+      ],
+      "gold": [
+        7
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q08",
+      "mode": "BM25",
+      "ranking": [
+        8,
+        9,
+        7,
+        10,
+        2
+      ],
+      "gold": [
+        8
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q09",
+      "mode": "BM25",
+      "ranking": [
+        9,
+        8,
+        11,
+        7,
+        14
+      ],
+      "gold": [
+        9
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q10",
+      "mode": "BM25",
+      "ranking": [
+        10,
+        21,
+        4,
+        7,
+        11
+      ],
+      "gold": [
+        10
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q11",
+      "mode": "BM25",
+      "ranking": [
+        11,
+        4,
+        19,
+        6,
+        3
+      ],
+      "gold": [
+        4,
+        11
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q12",
+      "mode": "BM25",
+      "ranking": [
+        12,
+        11,
+        9,
+        19,
+        22
+      ],
+      "gold": [
+        12
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q13",
+      "mode": "BM25",
+      "ranking": [
+        13,
+        16,
+        17
+      ],
+      "gold": [
+        13
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q14",
+      "mode": "BM25",
+      "ranking": [
+        14,
+        13,
+        23,
+        22,
+        15
+      ],
+      "gold": [
+        14
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q15",
+      "mode": "BM25",
+      "ranking": [
+        14,
+        17,
+        23,
+        2,
+        19
+      ],
+      "gold": [
+        15
+      ],
+      "recall": 0.0,
+      "mrr": 0,
+      "ndcg": 0.0
+    },
+    {
+      "question_id": "q16",
+      "mode": "BM25",
+      "ranking": [
+        16
+      ],
+      "gold": [
+        16
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q17",
+      "mode": "BM25",
+      "ranking": [
+        17,
+        13,
+        7,
+        23,
+        14
+      ],
+      "gold": [
+        17
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q18",
+      "mode": "BM25",
+      "ranking": [
+        14,
+        15,
+        17,
+        23,
+        20
+      ],
+      "gold": [
+        18
+      ],
+      "recall": 0.0,
+      "mrr": 0,
+      "ndcg": 0.0
+    },
+    {
+      "question_id": "q19",
+      "mode": "BM25",
+      "ranking": [
+        13,
+        14,
+        23,
+        19,
+        18
+      ],
+      "gold": [
+        13,
+        14
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q20",
+      "mode": "BM25",
+      "ranking": [
+        22,
+        5,
+        1,
+        4,
+        2
+      ],
+      "gold": [
+        22
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q21",
+      "mode": "BM25",
+      "ranking": [
+        23,
+        10,
+        13,
+        14,
+        1
+      ],
+      "gold": [
+        10,
+        23
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q22",
+      "mode": "BM25",
+      "ranking": [
+        5,
+        4,
+        11,
+        22,
+        9
+      ],
+      "gold": [
+        5
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q01",
+      "mode": "VECTOR",
+      "ranking": [
+        1,
+        22,
+        11,
+        4,
+        8
+      ],
+      "gold": [
+        1
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q02",
+      "mode": "VECTOR",
+      "ranking": [
+        2,
+        13,
+        11,
+        6,
+        16
+      ],
+      "gold": [
+        2
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q03",
+      "mode": "VECTOR",
+      "ranking": [
+        12,
+        3,
+        11,
+        4,
+        10
+      ],
+      "gold": [
+        3
+      ],
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "question_id": "q04",
+      "mode": "VECTOR",
+      "ranking": [
+        11,
+        4,
+        12,
+        8,
+        5
+      ],
+      "gold": [
+        4,
+        11
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q05",
+      "mode": "VECTOR",
+      "ranking": [
+        11,
+        5,
+        22,
+        1,
+        12
+      ],
+      "gold": [
+        5
+      ],
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "question_id": "q06",
+      "mode": "VECTOR",
+      "ranking": [
+        17,
+        6,
+        4,
+        13,
+        11
+      ],
+      "gold": [
+        6
+      ],
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "question_id": "q07",
+      "mode": "VECTOR",
+      "ranking": [
+        11,
+        22,
+        1,
+        4,
+        6
+      ],
+      "gold": [
+        7
+      ],
+      "recall": 0.0,
+      "mrr": 0,
+      "ndcg": 0.0
+    },
+    {
+      "question_id": "q08",
+      "mode": "VECTOR",
+      "ranking": [
+        8,
+        9,
+        22,
+        7,
+        11
+      ],
+      "gold": [
+        8
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q09",
+      "mode": "VECTOR",
+      "ranking": [
+        8,
+        9,
+        22,
+        7,
+        12
+      ],
+      "gold": [
+        9
+      ],
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "question_id": "q10",
+      "mode": "VECTOR",
+      "ranking": [
+        10,
+        22,
+        8,
+        21,
+        3
+      ],
+      "gold": [
+        10
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q11",
+      "mode": "VECTOR",
+      "ranking": [
+        11,
+        4,
+        5,
+        22,
+        1
+      ],
+      "gold": [
+        4,
+        11
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q12",
+      "mode": "VECTOR",
+      "ranking": [
+        12,
+        22,
+        8,
+        21,
+        4
+      ],
+      "gold": [
+        12
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q13",
+      "mode": "VECTOR",
+      "ranking": [
+        14,
+        16,
+        13,
+        17,
+        6
+      ],
+      "gold": [
+        13
+      ],
+      "recall": 1.0,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5
+    },
+    {
+      "question_id": "q14",
+      "mode": "VECTOR",
+      "ranking": [
+        14,
+        23,
+        11,
+        16,
+        2
+      ],
+      "gold": [
+        14
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q15",
+      "mode": "VECTOR",
+      "ranking": [
+        14,
+        18,
+        6,
+        1,
+        3
+      ],
+      "gold": [
+        15
+      ],
+      "recall": 0.0,
+      "mrr": 0,
+      "ndcg": 0.0
+    },
+    {
+      "question_id": "q16",
+      "mode": "VECTOR",
+      "ranking": [
+        16,
+        2,
+        14,
+        3,
+        11
+      ],
+      "gold": [
+        16
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q17",
+      "mode": "VECTOR",
+      "ranking": [
+        17,
+        13,
+        23,
+        6,
+        14
+      ],
+      "gold": [
+        17
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q18",
+      "mode": "VECTOR",
+      "ranking": [
+        14,
+        18,
+        11,
+        6,
+        16
+      ],
+      "gold": [
+        18
+      ],
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "question_id": "q19",
+      "mode": "VECTOR",
+      "ranking": [
+        14,
+        13,
+        6,
+        2,
+        18
+      ],
+      "gold": [
+        13,
+        14
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q20",
+      "mode": "VECTOR",
+      "ranking": [
+        22,
+        1,
+        7,
+        5,
+        4
+      ],
+      "gold": [
+        22
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q21",
+      "mode": "VECTOR",
+      "ranking": [
+        23,
+        10,
+        8,
+        22,
+        7
+      ],
+      "gold": [
+        10,
+        23
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q22",
+      "mode": "VECTOR",
+      "ranking": [
+        5,
+        1,
+        11,
+        22,
+        4
+      ],
+      "gold": [
+        5
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q01",
+      "mode": "RRF",
+      "ranking": [
+        1,
+        22,
+        4,
+        6,
+        7
+      ],
+      "gold": [
+        1
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q02",
+      "mode": "RRF",
+      "ranking": [
+        2,
+        11,
+        13,
+        6,
+        16
+      ],
+      "gold": [
+        2
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q03",
+      "mode": "RRF",
+      "ranking": [
+        3,
+        8,
+        11,
+        5,
+        1
+      ],
+      "gold": [
+        3
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q04",
+      "mode": "RRF",
+      "ranking": [
+        4,
+        11,
+        2,
+        5,
+        1
+      ],
+      "gold": [
+        4,
+        11
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q05",
+      "mode": "RRF",
+      "ranking": [
+        5,
+        11,
+        1,
+        4,
+        12
+      ],
+      "gold": [
+        5
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q06",
+      "mode": "RRF",
+      "ranking": [
+        6,
+        4,
+        11,
+        13,
+        23
+      ],
+      "gold": [
+        6
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q07",
+      "mode": "RRF",
+      "ranking": [
+        11,
+        7,
+        2,
+        6,
+        22
+      ],
+      "gold": [
+        7
+      ],
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "question_id": "q08",
+      "mode": "RRF",
+      "ranking": [
+        8,
+        9,
+        7,
+        22,
+        1
+      ],
+      "gold": [
+        8
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q09",
+      "mode": "RRF",
+      "ranking": [
+        8,
+        9,
+        7,
+        11,
+        22
+      ],
+      "gold": [
+        9
+      ],
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "question_id": "q10",
+      "mode": "RRF",
+      "ranking": [
+        10,
+        21,
+        4,
+        7,
+        11
+      ],
+      "gold": [
+        10
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q11",
+      "mode": "RRF",
+      "ranking": [
+        11,
+        4,
+        5,
+        19,
+        8
+      ],
+      "gold": [
+        4,
+        11
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q12",
+      "mode": "RRF",
+      "ranking": [
+        12,
+        22,
+        11,
+        9,
+        19
+      ],
+      "gold": [
+        12
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q13",
+      "mode": "RRF",
+      "ranking": [
+        13,
+        16,
+        17,
+        14,
+        6
+      ],
+      "gold": [
+        13
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q14",
+      "mode": "RRF",
+      "ranking": [
+        14,
+        23,
+        13,
+        16,
+        2
+      ],
+      "gold": [
+        14
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q15",
+      "mode": "RRF",
+      "ranking": [
+        14,
+        18,
+        17,
+        15,
+        23
+      ],
+      "gold": [
+        15
+      ],
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "question_id": "q16",
+      "mode": "RRF",
+      "ranking": [
+        16,
+        2,
+        14,
+        3,
+        11
+      ],
+      "gold": [
+        16
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q17",
+      "mode": "RRF",
+      "ranking": [
+        17,
+        13,
+        23,
+        14,
+        7
+      ],
+      "gold": [
+        17
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q18",
+      "mode": "RRF",
+      "ranking": [
+        14,
+        18,
+        17,
+        16,
+        23
+      ],
+      "gold": [
+        18
+      ],
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "question_id": "q19",
+      "mode": "RRF",
+      "ranking": [
+        13,
+        14,
+        18,
+        23,
+        19
+      ],
+      "gold": [
+        13,
+        14
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q20",
+      "mode": "RRF",
+      "ranking": [
+        22,
+        1,
+        5,
+        7,
+        4
+      ],
+      "gold": [
+        22
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q21",
+      "mode": "RRF",
+      "ranking": [
+        23,
+        10,
+        1,
+        13,
+        12
+      ],
+      "gold": [
+        10,
+        23
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q22",
+      "mode": "RRF",
+      "ranking": [
+        5,
+        11,
+        4,
+        22,
+        1
+      ],
+      "gold": [
+        5
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q01",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        1,
+        22,
+        4,
+        7,
+        6
+      ],
+      "gold": [
+        1
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q02",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        2,
+        6,
+        11,
+        13,
+        16
+      ],
+      "gold": [
+        2
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q03",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        3,
+        8,
+        11,
+        5,
+        1
+      ],
+      "gold": [
+        3
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q04",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        4,
+        11,
+        2,
+        5,
+        1
+      ],
+      "gold": [
+        4,
+        11
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q05",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        5,
+        11,
+        1,
+        4,
+        12
+      ],
+      "gold": [
+        5
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q06",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        6,
+        4,
+        11,
+        13,
+        23
+      ],
+      "gold": [
+        6
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q07",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        11,
+        7,
+        2,
+        9,
+        22
+      ],
+      "gold": [
+        7
+      ],
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "question_id": "q08",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        8,
+        9,
+        7,
+        22,
+        1
+      ],
+      "gold": [
+        8
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q09",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        9,
+        8,
+        11,
+        7,
+        12
+      ],
+      "gold": [
+        9
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q10",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        10,
+        21,
+        4,
+        7,
+        11
+      ],
+      "gold": [
+        10
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q11",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        11,
+        4,
+        5,
+        19,
+        8
+      ],
+      "gold": [
+        4,
+        11
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q12",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        12,
+        22,
+        11,
+        9,
+        19
+      ],
+      "gold": [
+        12
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q13",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        13,
+        16,
+        17,
+        14,
+        6
+      ],
+      "gold": [
+        13
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q14",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        14,
+        23,
+        13,
+        16,
+        2
+      ],
+      "gold": [
+        14
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q15",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        14,
+        17,
+        18,
+        15,
+        23
+      ],
+      "gold": [
+        15
+      ],
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "question_id": "q16",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        16,
+        2,
+        14,
+        3,
+        11
+      ],
+      "gold": [
+        16
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q17",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        17,
+        13,
+        23,
+        14,
+        7
+      ],
+      "gold": [
+        17
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q18",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        14,
+        18,
+        17,
+        16,
+        23
+      ],
+      "gold": [
+        18
+      ],
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575
+    },
+    {
+      "question_id": "q19",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        14,
+        13,
+        23,
+        17,
+        18
+      ],
+      "gold": [
+        13,
+        14
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q20",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        22,
+        1,
+        5,
+        4,
+        7
+      ],
+      "gold": [
+        22
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q21",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        23,
+        10,
+        1,
+        13,
+        12
+      ],
+      "gold": [
+        10,
+        23
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q22",
+      "mode": "RRF_LEXICAL",
+      "ranking": [
+        5,
+        4,
+        11,
+        22,
+        1
+      ],
+      "gold": [
+        5
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q01",
+      "mode": "LEGACY",
+      "ranking": [
+        1,
+        9,
+        11,
+        8,
+        2
+      ],
+      "gold": [
+        1
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q02",
+      "mode": "LEGACY",
+      "ranking": [
+        2,
+        3,
+        19,
+        4,
+        14
+      ],
+      "gold": [
+        2
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q03",
+      "mode": "LEGACY",
+      "ranking": [
+        8,
+        12,
+        5,
+        3,
+        4
+      ],
+      "gold": [
+        3
+      ],
+      "recall": 1.0,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306
+    },
+    {
+      "question_id": "q04",
+      "mode": "LEGACY",
+      "ranking": [
+        4,
+        12,
+        8,
+        23,
+        13
+      ],
+      "gold": [
+        4,
+        11
+      ],
+      "recall": 0.5,
+      "mrr": 1.0,
+      "ndcg": 0.6131471927654584
+    },
+    {
+      "question_id": "q05",
+      "mode": "LEGACY",
+      "ranking": [
+        5,
+        11,
+        23,
+        1,
+        16
+      ],
+      "gold": [
+        5
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q06",
+      "mode": "LEGACY",
+      "ranking": [
+        6,
+        17,
+        16,
+        12,
+        8
+      ],
+      "gold": [
+        6
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q07",
+      "mode": "LEGACY",
+      "ranking": [
+        7,
+        9,
+        14,
+        3,
+        12
+      ],
+      "gold": [
+        7
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q08",
+      "mode": "LEGACY",
+      "ranking": [
+        8,
+        9,
+        12,
+        7,
+        3
+      ],
+      "gold": [
+        8
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q09",
+      "mode": "LEGACY",
+      "ranking": [
+        9,
+        21,
+        8,
+        23,
+        3
+      ],
+      "gold": [
+        9
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q10",
+      "mode": "LEGACY",
+      "ranking": [
+        10,
+        22,
+        8,
+        3,
+        23
+      ],
+      "gold": [
+        10
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q11",
+      "mode": "LEGACY",
+      "ranking": [
+        11,
+        4,
+        22,
+        19,
+        10
+      ],
+      "gold": [
+        4,
+        11
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q12",
+      "mode": "LEGACY",
+      "ranking": [
+        12,
+        4,
+        8,
+        21,
+        7
+      ],
+      "gold": [
+        12
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q13",
+      "mode": "LEGACY",
+      "ranking": [
+        13,
+        16,
+        14,
+        4,
+        19
+      ],
+      "gold": [
+        13
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q14",
+      "mode": "LEGACY",
+      "ranking": [
+        14,
+        3,
+        12,
+        19,
+        1
+      ],
+      "gold": [
+        14
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q15",
+      "mode": "LEGACY",
+      "ranking": [
+        14,
+        13,
+        12,
+        4,
+        11
+      ],
+      "gold": [
+        15
+      ],
+      "recall": 0.0,
+      "mrr": 0,
+      "ndcg": 0.0
+    },
+    {
+      "question_id": "q16",
+      "mode": "LEGACY",
+      "ranking": [
+        16,
+        2,
+        14,
+        11,
+        3
+      ],
+      "gold": [
+        16
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q17",
+      "mode": "LEGACY",
+      "ranking": [
+        17,
+        6,
+        4,
+        20,
+        18
+      ],
+      "gold": [
+        17
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q18",
+      "mode": "LEGACY",
+      "ranking": [
+        14,
+        15,
+        17,
+        11,
+        6
+      ],
+      "gold": [
+        18
+      ],
+      "recall": 0.0,
+      "mrr": 0,
+      "ndcg": 0.0
+    },
+    {
+      "question_id": "q19",
+      "mode": "LEGACY",
+      "ranking": [
+        14,
+        13,
+        6,
+        2,
+        4
+      ],
+      "gold": [
+        13,
+        14
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q20",
+      "mode": "LEGACY",
+      "ranking": [
+        22,
+        5,
+        3,
+        17,
+        14
+      ],
+      "gold": [
+        22
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    },
+    {
+      "question_id": "q21",
+      "mode": "LEGACY",
+      "ranking": [
+        23,
+        22,
+        10,
+        3,
+        8
+      ],
+      "gold": [
+        10,
+        23
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 0.9197207891481876
+    },
+    {
+      "question_id": "q22",
+      "mode": "LEGACY",
+      "ranking": [
+        5,
+        4,
+        23,
+        20,
+        10
+      ],
+      "gold": [
+        5
+      ],
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg": 1.0
+    }
+  ]
+}

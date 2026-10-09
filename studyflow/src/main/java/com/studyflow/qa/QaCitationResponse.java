@@ -9,7 +9,9 @@ public record QaCitationResponse(
         String parserType,
         String documentName,
         String contentPreview,
-        Double score
+        Double score,
+        Long claimId, String sourceId, String quote, Integer charStart, Integer charEnd,
+        String contentHash, Long documentGeneration, String verificationStatus
 ) {
     public static QaCitationResponse from(QaCitationEntity entity) {
         return new QaCitationResponse(
@@ -21,7 +23,9 @@ public record QaCitationResponse(
                 entity.getParserType(),
                 entity.getDocumentName(),
                 entity.getContentPreview(),
-                entity.getScore()
+                entity.getScore(),
+                entity.getClaimId(), entity.getSourceId(), entity.getQuote(), entity.getCharStart(), entity.getCharEnd(),
+                entity.getContentHash(), entity.getDocumentGeneration(), entity.getVerificationStatus()
         );
     }
 }

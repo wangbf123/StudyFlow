@@ -2,6 +2,7 @@ package com.studyflow.search;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.Refresh;
+import co.elastic.clients.elasticsearch.core.bulk.BulkOperation;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -9,6 +10,9 @@ import com.studyflow.document.DocumentChunkEntity;
 import com.studyflow.document.DocumentChunkMapper;
 import com.studyflow.document.DocumentEntity;
 import com.studyflow.document.DocumentMapper;
+import com.studyflow.document.DocumentStatus;
+import com.studyflow.kb.KnowledgeBaseMapper;
+import com.studyflow.search.SearchProperties.RetrievalMode;
 import com.studyflow.embedding.EmbeddingClient;
 import com.studyflow.embedding.EmbeddingProperties;
 import com.studyflow.embedding.EmbeddingVectorCodec;
@@ -19,7 +23,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Objects;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,9 +39,10 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class SearchService {
 
-    private static final String INDEX = "studyflow_document_chunk";
-
     private final ElasticsearchClient elasticsearchClient;
+    private final SearchProperties searchProperties;
+    private final ChunkIndexManager indexManager;
+    private final KnowledgeBaseMapper knowledgeBaseMapper;
     private final DocumentChunkMapper documentChunkMapper;
     private final DocumentMapper documentMapper;
     private final EmbeddingClient embeddingClient;
@@ -45,36 +52,70 @@ public class SearchService {
     private final RagReranker ragReranker;
 
     public void indexChunks(DocumentEntity document, List<DocumentChunkEntity> chunks) {
-        for (DocumentChunkEntity chunk : chunks) {
-            indexChunk(document, chunk);
+        if (chunks.isEmpty()) return;
+        try {
+            indexManager.ensureIndex();
+            // Bulk in bounded batches, refresh once per batch instead of once per chunk.
+            for (int start = 0; start < chunks.size(); start += 100) {
+                List<BulkOperation> operations = new ArrayList<>();
+                for (DocumentChunkEntity chunk : chunks.subList(start, Math.min(start + 100, chunks.size()))) {
+                    DocumentChunkIndex source = indexDocument(document, chunk);
+                    operations.add(BulkOperation.of(op -> op.index(i -> i.index(searchProperties.getIndex())
+                            .id(document.getId() + ":" + source.getGeneration() + ":" + chunk.getChunkIndex())
+                            .document(source))));
+                }
+                var response = elasticsearchClient.bulk(b -> b.operations(operations).refresh(Refresh.WaitFor));
+                if (response.errors()) {
+                    String details = response.items().stream().filter(i -> i.error() != null)
+                            .map(i -> i.error().type() + ": " + i.error().reason())
+                            .limit(3).collect(Collectors.joining("; "));
+                    throw new IllegalStateException("Chunk indexing failed: " + details);
+                }
+            }
+        } catch (IOException ex) {
+            throw new IllegalStateException("Write Elasticsearch chunk index failed", ex);
         }
     }
 
     public void indexChunk(DocumentEntity document, DocumentChunkEntity chunk) {
+        indexChunks(document, List.of(chunk));
+    }
+
+    private DocumentChunkIndex indexDocument(DocumentEntity document, DocumentChunkEntity chunk) {
         List<Double> vector = embeddingVectorCodec.decode(chunk.getEmbedding());
-        DocumentChunkIndex index = new DocumentChunkIndex(
-                chunk.getId(),
-                chunk.getDocumentId(),
-                chunk.getKnowledgeBaseId(),
-                chunk.getUserId(),
-                document.getOriginalFileName(),
-                chunk.getChunkIndex(),
-                chunk.getPageNumber(),
-                chunk.getParserType(),
-                chunk.getOcrConfidence(),
-                chunk.getContent(),
-                vector.isEmpty() ? null : vector,
-                chunk.getEmbeddingModel(),
-                chunk.getEmbeddingDim()
-        );
+        if (!vector.isEmpty() && (vector.size() != ChunkIndexManager.DIMENSION
+                || vector.stream().anyMatch(v -> v == null || !Double.isFinite(v))
+                || vector.stream().allMatch(v -> v == 0.0))) {
+            throw new IllegalStateException("Chunk embeddings must be finite, nonzero 512-dimensional vectors; rebuild "
+                    + document.getId() + " with the pinned embedding model");
+        }
+        Long generation = chunk.getGeneration() == null ? 1L : chunk.getGeneration();
+        return new DocumentChunkIndex(chunk.getId(), chunk.getDocumentId(), chunk.getKnowledgeBaseId(),
+                chunk.getUserId(), document.getOriginalFileName(), chunk.getChunkIndex(), chunk.getPageNumber(),
+                chunk.getParserType(), chunk.getOcrConfidence(), chunk.getContent(), vector.isEmpty() ? null : vector,
+                chunk.getEmbeddingModel(), chunk.getEmbeddingDim(), generation);
+    }
+
+    public void deleteDocumentChunks(Long documentId) {
+        deleteIndexed(Query.of(q -> q.term(t -> t.field("documentId").value(documentId))));
+    }
+
+    public void deleteDocumentGeneration(Long documentId, Long generation) {
+        deleteIndexed(Query.of(q -> q.bool(b -> b
+                .filter(f -> f.term(t -> t.field("documentId").value(documentId)))
+                .filter(f -> f.term(t -> t.field("generation").value(generation))))));
+    }
+
+    private void deleteIndexed(Query query) {
         try {
-            elasticsearchClient.index(request -> request
-                    .index(INDEX)
-                    .id(String.valueOf(chunk.getId()))
-                    .document(index)
-                    .refresh(Refresh.True));
+            indexManager.ensureIndex();
+            var response = elasticsearchClient.deleteByQuery(r -> r.index(searchProperties.getIndex())
+                    .query(query).refresh(true));
+            if (!response.failures().isEmpty() || response.versionConflicts() > 0) {
+                throw new IllegalStateException("Elasticsearch cleanup incomplete; retry required");
+            }
         } catch (IOException ex) {
-            throw new IllegalStateException("Write Elasticsearch chunk index failed: " + ex.getMessage(), ex);
+            throw new IllegalStateException("Delete Elasticsearch chunks failed", ex);
         }
     }
 
@@ -85,47 +126,125 @@ public class SearchService {
     }
 
     public List<ChunkSearchResult> searchChunks(Long userId, Long knowledgeBaseId, String keyword, int page, int size) {
+        RetrievalMode mode = ragProperties.isHybridEnabled() ? searchProperties.getMode() : RetrievalMode.BM25;
+        return searchChunks(userId, knowledgeBaseId, keyword, page, size, mode);
+    }
+
+    /** Per-request mode isolates ablation runs; it never changes global application configuration. */
+    public List<ChunkSearchResult> searchChunks(Long userId, Long knowledgeBaseId, String keyword,
+                                               int page, int size, RetrievalMode mode) {
         String queryText = keyword == null ? "" : keyword.trim();
-        if (queryText.isBlank()) {
+        if (queryText.isBlank()) return List.of();
+        if (mode == null) mode = searchProperties.getMode();
+        var kb = knowledgeBaseMapper.selectById(knowledgeBaseId);
+        if (kb == null || !Objects.equals(kb.getUserId(), userId) || !"ACTIVE".equals(kb.getStatus())) {
             return List.of();
         }
-
         int safePage = Math.max(page, 0);
         int safeSize = Math.min(Math.max(size, 1), 50);
-        int from = safePage * safeSize;
-        int candidateSize = candidateSize(from, safeSize);
-
-        Map<Long, Candidate> candidates = new LinkedHashMap<>();
-        List<Hit<DocumentChunkIndex>> bm25Hits = fetchBm25Hits(userId, knowledgeBaseId, queryText, candidateSize);
-        addBm25Candidates(candidates, bm25Hits);
-
-        List<Double> queryVector = queryVector(queryText);
-        if (!queryVector.isEmpty()) {
-            enrichBm25CandidatesWithVectors(candidates, queryVector);
-            addVectorCandidates(candidates, userId, knowledgeBaseId, queryVector);
+        // Candidate retrieval is deliberately bounded; deep pagination cannot silently overflow.
+        long offset = (long) safePage * safeSize;
+        if (offset >= searchProperties.getMaxCandidates()) {
+            throw new IllegalArgumentException("Search pagination exceeds the bounded candidate window");
         }
-
-        double maxBm25 = candidates.values().stream()
-                .map(candidate -> candidate.bm25Raw)
-                .filter(score -> score != null && score > 0.0)
-                .mapToDouble(Double::doubleValue)
-                .max()
-                .orElse(0.0);
-
+        int from = (int) offset;
+        int candidateSize = candidateSize(from, safeSize);
+        Map<Long, Candidate> candidates = new LinkedHashMap<>();
+        List<Long> lexical = new ArrayList<>();
+        List<Long> semantic = new ArrayList<>();
+        if (mode != RetrievalMode.VECTOR) {
+            List<Hit<DocumentChunkIndex>> hits = fetchBm25Hits(userId, knowledgeBaseId, queryText, candidateSize);
+            addBm25Candidates(candidates, hits);
+            lexical.addAll(hits.stream().map(Hit::source).filter(Objects::nonNull)
+                    .map(DocumentChunkIndex::getChunkId).filter(Objects::nonNull).toList());
+        }
+        if (mode != RetrievalMode.BM25) {
+            List<Double> vector = queryVector(queryText);
+            if (vector.isEmpty() && mode == RetrievalMode.VECTOR) {
+                throw new IllegalStateException("Vector-only retrieval requires a working embedding provider");
+            }
+            if (!vector.isEmpty()) {
+                if (mode == RetrievalMode.LEGACY) {
+                    enrichBm25CandidatesWithVectors(candidates, vector);
+                    addVectorCandidates(candidates, userId, knowledgeBaseId, vector);
+                } else {
+                    List<Hit<DocumentChunkIndex>> hits = fetchVectorHits(userId, knowledgeBaseId, vector, candidateSize);
+                    for (Hit<DocumentChunkIndex> hit : hits) {
+                        DocumentChunkIndex source = hit.source();
+                        if (source == null || source.getContent() == null || source.getContent().isBlank()) continue;
+                        Candidate candidate = candidates.computeIfAbsent(source.getChunkId(), id -> fromIndex(source));
+                        candidate.vectorScore = hit.score();
+                        semantic.add(source.getChunkId());
+                    }
+                }
+            }
+        }
+        // Elasticsearch is a projection. Database ownership, state and generation remain authoritative.
+        keepCurrentCandidates(candidates, userId, knowledgeBaseId);
+        lexical.removeIf(id -> !candidates.containsKey(id));
+        semantic.removeIf(id -> !candidates.containsKey(id));
+        Map<Long, Double> fused = ReciprocalRankFusion.scores(lexical, semantic,
+                Math.max(searchProperties.getRrfConstant(), 1));
+        double maxBm25 = candidates.values().stream().map(c -> c.bm25Raw).filter(Objects::nonNull)
+                .mapToDouble(Double::doubleValue).max().orElse(0.0);
+        RetrievalMode selectedMode = mode;
         return candidates.values().stream()
-                .map(candidate -> toResult(candidate, queryText, maxBm25))
+                .map(candidate -> toResult(candidate, queryText, maxBm25, selectedMode, fused))
                 .sorted(Comparator.<ChunkSearchResult>comparingDouble(result -> nullToZero(result.score()))
-                        .reversed()
-                        .thenComparing(result -> nullToZero(result.chunkId())))
-                .skip(from)
-                .limit(safeSize)
-                .toList();
+                        .reversed().thenComparing(result -> nullToZero(result.chunkId())))
+                .skip(from).limit(safeSize).toList();
     }
+
+    private List<Hit<DocumentChunkIndex>> fetchVectorHits(Long userId, Long knowledgeBaseId,
+                                                         List<Double> vector, int size) {
+        if (vector.size() != ChunkIndexManager.DIMENSION) {
+            throw new IllegalStateException("Query embedding dimension must be 512; use matching model/index");
+        }
+        try {
+            indexManager.ensureIndex();
+            var response = elasticsearchClient.search(r -> r.index(searchProperties.getIndex()).size(size)
+                    .knn(k -> k.field("embedding").queryVector(vector.stream().map(Double::floatValue).toList())
+                            .k((long) size).numCandidates((long) Math.max(size, searchProperties.getKnnCandidates()))
+                            .filter(f -> f.bool(b -> b
+                                    .filter(t -> t.term(x -> x.field("userId").value(userId)))
+                                    .filter(t -> t.term(x -> x.field("knowledgeBaseId").value(knowledgeBaseId)))
+                                    .filter(t -> t.term(x -> x.field("embeddingModel").value(embeddingClient.model())))
+                                    .filter(t -> t.term(x -> x.field("embeddingDim").value(vector.size())))))),
+                    DocumentChunkIndex.class);
+            return response.hits().hits();
+        } catch (IOException ex) {
+            throw new IllegalStateException("Elasticsearch vector retrieval failed", ex);
+        }
+    }
+
+    private void keepCurrentCandidates(Map<Long, Candidate> candidates, Long userId, Long knowledgeBaseId) {
+        Map<Long, DocumentChunkEntity> chunks = selectChunksByIds(candidates.keySet());
+        Set<Long> documentIds = candidates.values().stream().map(c -> c.documentId).collect(Collectors.toSet());
+        Map<Long, DocumentEntity> documents = documentIds.isEmpty() ? Map.of()
+                : documentMapper.selectBatchIds(documentIds).stream()
+                .collect(Collectors.toMap(DocumentEntity::getId, Function.identity()));
+        candidates.entrySet().removeIf(entry -> {
+            Candidate indexed = entry.getValue();
+            DocumentChunkEntity chunk = chunks.get(entry.getKey());
+            DocumentEntity document = documents.get(indexed.documentId);
+            return chunk == null || document == null
+                    || !Objects.equals(chunk.getUserId(), userId)
+                    || !Objects.equals(document.getUserId(), userId)
+                    || !Objects.equals(chunk.getKnowledgeBaseId(), knowledgeBaseId)
+                    || !Objects.equals(document.getKnowledgeBaseId(), knowledgeBaseId)
+                    || !Objects.equals(chunk.getDocumentId(), document.getId())
+                    || !DocumentStatus.SUCCESS.equals(document.getParseStatus())
+                    || !Objects.equals(generation(chunk.getGeneration()), generation(document.getGeneration()))
+                    || !Objects.equals(generation(indexed.generation), generation(document.getGeneration()));
+        });
+    }
+
+    private Long generation(Long value) { return value == null ? 1L : value; }
 
     private int candidateSize(int from, int safeSize) {
         int configured = Math.max(ragProperties.getBm25CandidateSize(), 10);
         int requested = from + safeSize * 5;
-        return Math.min(Math.max(configured, requested), 200);
+        return Math.min(Math.max(configured, requested), Math.max(searchProperties.getMaxCandidates(), 10));
     }
 
     private List<Hit<DocumentChunkIndex>> fetchBm25Hits(
@@ -135,16 +254,16 @@ public class SearchService {
             int size
     ) {
         try {
+            indexManager.ensureIndex();
             var response = elasticsearchClient.search(request -> request
-                            .index(INDEX)
+                            .index(searchProperties.getIndex())
                             .from(0)
                             .size(size)
                             .query(buildQuery(userId, knowledgeBaseId, keyword)),
                     DocumentChunkIndex.class);
             return response.hits().hits();
         } catch (IOException ex) {
-            log.warn("Elasticsearch BM25 search failed, vector retrieval may still continue: {}", ex.getMessage());
-            return List.of();
+            throw new IllegalStateException("Elasticsearch BM25 retrieval failed", ex);
         }
     }
 
@@ -220,6 +339,7 @@ public class SearchService {
         DocumentEntity document = documentMap.get(chunk.getDocumentId());
         Candidate candidate = new Candidate();
         candidate.chunkId = chunk.getId();
+        candidate.generation = chunk.getGeneration();
         candidate.documentId = chunk.getDocumentId();
         candidate.knowledgeBaseId = chunk.getKnowledgeBaseId();
         candidate.fileName = document == null ? "document-" + chunk.getDocumentId() : document.getOriginalFileName();
@@ -265,13 +385,21 @@ public class SearchService {
         candidate.hasEmbedding = true;
     }
 
-    private ChunkSearchResult toResult(Candidate candidate, String queryText, double maxBm25) {
+    private ChunkSearchResult toResult(Candidate candidate, String queryText, double maxBm25,
+                                       RetrievalMode mode, Map<Long, Double> fused) {
         double bm25Score = candidate.bm25Raw == null || maxBm25 <= 0.0 ? 0.0 : candidate.bm25Raw / maxBm25;
         Double vectorScore = candidate.vectorScore;
-        double rerankScore = ragProperties.isHybridEnabled() ? ragReranker.score(queryText, candidate.content) : 0.0;
-        double finalScore = ragProperties.isHybridEnabled()
-                ? combine(bm25Score, vectorScore, rerankScore, candidate.bm25Raw != null)
-                : bm25Score;
+        double rerankScore = (mode == RetrievalMode.LEGACY || mode == RetrievalMode.RRF_LEXICAL)
+                ? ragReranker.score(queryText, candidate.content) : 0.0;
+        double rrf = fused.getOrDefault(candidate.chunkId, 0.0);
+        double finalScore = switch (mode) {
+            case BM25 -> candidate.bm25Raw == null ? 0.0 : candidate.bm25Raw;
+            case VECTOR -> vectorScore == null ? 0.0 : vectorScore;
+            case LEGACY -> combine(bm25Score, vectorScore, rerankScore, candidate.bm25Raw != null);
+            case RRF -> rrf;
+            // Normalize RRF by its theoretical two-list maximum before adding the lexical baseline.
+            case RRF_LEXICAL -> 0.9 * rrf * (searchProperties.getRrfConstant() + 1) / 2.0 + 0.1 * rerankScore;
+        };
         return new ChunkSearchResult(
                 candidate.chunkId,
                 candidate.documentId,
@@ -285,7 +413,7 @@ public class SearchService {
                 round(finalScore),
                 round(bm25Score),
                 round(vectorScore),
-                ragProperties.isHybridEnabled() ? round(rerankScore) : null,
+                (mode == RetrievalMode.LEGACY || mode == RetrievalMode.RRF_LEXICAL) ? round(rerankScore) : null,
                 source(candidate),
                 candidate.hasEmbedding,
                 candidate.embeddingModel,
@@ -327,6 +455,7 @@ public class SearchService {
     private Candidate fromIndex(DocumentChunkIndex source) {
         Candidate candidate = new Candidate();
         candidate.chunkId = source.getChunkId();
+        candidate.generation = source.getGeneration();
         candidate.documentId = source.getDocumentId();
         candidate.knowledgeBaseId = source.getKnowledgeBaseId();
         candidate.fileName = source.getFileName();
@@ -343,7 +472,7 @@ public class SearchService {
     }
 
     private List<Double> queryVector(String text) {
-        if (!embeddingProperties.isEnabled() || !ragProperties.isHybridEnabled()) {
+        if (!embeddingProperties.isEnabled()) {
             return List.of();
         }
         try {
@@ -395,7 +524,7 @@ public class SearchService {
         if (value == null) {
             return null;
         }
-        return Math.round(value * 10000.0) / 10000.0;
+        return Math.round(value * 100000000.0) / 100000000.0;
     }
 
     private double nullToZero(Double value) {
@@ -408,6 +537,7 @@ public class SearchService {
 
     private static class Candidate {
         private Long chunkId;
+        private Long generation;
         private Long documentId;
         private Long knowledgeBaseId;
         private String fileName;

@@ -25,6 +25,13 @@ public class QaMessageEntity {
     private Integer completionTokens;
     private Long latencyMs;
     private String errorMessage;
+    private String answerStatus;
+    private String verificationMode;
+    private String verifierModel;
+    private Long verificationLatencyMs;
+    private Integer verificationPromptTokens;
+    private Integer verificationCompletionTokens;
+    private Integer rejectedClaimCount;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;

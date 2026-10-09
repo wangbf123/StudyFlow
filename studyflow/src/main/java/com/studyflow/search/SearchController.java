@@ -24,10 +24,13 @@ public class SearchController {
             @RequestParam Long knowledgeBaseId,
             @RequestParam String keyword,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "10") int size
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) SearchProperties.RetrievalMode mode
     ) {
         Long userId = StpUtil.getLoginIdAsLong();
         knowledgeBaseService.getOwnedActive(userId, knowledgeBaseId);
-        return Result.ok(searchService.search(userId, knowledgeBaseId, keyword, page, size));
+        return Result.ok(mode == null ? searchService.search(userId, knowledgeBaseId, keyword, page, size)
+                : searchService.searchChunks(userId, knowledgeBaseId, keyword, page, size, mode).stream()
+                .map(SearchResponse::from).toList());
     }
 }

@@ -15,6 +15,9 @@ public record QaMessageResponse(
         Long latencyMs,
         String errorMessage,
         LocalDateTime createTime,
-        List<QaCitationResponse> citations
+        List<QaCitationResponse> citations,
+        String answerStatus, String verificationMode, String verifierModel, Long verificationLatencyMs,
+        Integer verificationPromptTokens, Integer verificationCompletionTokens, Integer rejectedClaimCount,
+        List<QaClaimResponse> claims
 ) {
 }

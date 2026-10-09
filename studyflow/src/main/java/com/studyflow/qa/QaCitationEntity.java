@@ -23,6 +23,14 @@ public class QaCitationEntity {
     private String documentName;
     private String contentPreview;
     private Double score;
+    private Long claimId;
+    private String sourceId;
+    private String quote;
+    private Integer charStart;
+    private Integer charEnd;
+    private String contentHash;
+    private Long documentGeneration;
+    private String verificationStatus;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;

@@ -24,4 +24,5 @@ public class DocumentChunkIndex {
     private List<Double> embedding;
     private String embeddingModel;
     private Integer embeddingDim;
+    private Long generation;
 }

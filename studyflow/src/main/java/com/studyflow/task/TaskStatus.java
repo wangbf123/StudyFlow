@@ -2,6 +2,7 @@ package com.studyflow.task;
 
 public final class TaskStatus {
 
+    public static final String CANCELLED = "CANCELLED";
     public static final String PENDING = "PENDING";
     public static final String PROCESSING = "PROCESSING";
     public static final String SUCCESS = "SUCCESS";

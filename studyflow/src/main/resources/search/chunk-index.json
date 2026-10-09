@@ -1,0 +1,26 @@
+{
+  "settings": {"number_of_shards": 1, "number_of_replicas": 0},
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "chunkId": {"type": "long"},
+      "documentId": {"type": "long"},
+      "knowledgeBaseId": {"type": "long"},
+      "userId": {"type": "long"},
+      "generation": {"type": "long"},
+      "fileName": {"type": "keyword", "index": false},
+      "chunkIndex": {"type": "integer"},
+      "pageNumber": {"type": "integer"},
+      "parserType": {"type": "keyword"},
+      "ocrConfidence": {"type": "double"},
+      "content": {"type": "text", "analyzer": "cjk"},
+      "embedding": {
+        "type": "dense_vector", "dims": 512, "index": true,
+        "similarity": "cosine",
+        "index_options": {"type": "hnsw", "m": 16, "ef_construction": 100}
+      },
+      "embeddingModel": {"type": "keyword"},
+      "embeddingDim": {"type": "integer"}
+    }
+  }
+}

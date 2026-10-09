@@ -23,6 +23,7 @@ public class DocumentEntity {
     private String bucket;
     private String objectKey;
     private String parseStatus;
+    private Long generation;
     private String parserType;
     private Integer pageCount;
     private Integer ocrPageCount;

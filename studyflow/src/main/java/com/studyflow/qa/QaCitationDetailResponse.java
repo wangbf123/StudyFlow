@@ -12,6 +12,8 @@ public record QaCitationDetailResponse(
         String documentName,
         String content,
         String contentPreview,
-        Double score
+        Double score,
+        String quote, Integer charStart, Integer charEnd, Long documentGeneration,
+        String contentHash, String verificationStatus, String evidenceState
 ) {
 }

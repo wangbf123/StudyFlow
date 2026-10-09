@@ -24,9 +24,7 @@ public class ParseTaskListener implements RocketMQListener<Long> {
     @Override
     public void onMessage(Long taskId) {
         ParseTaskResult result = documentParseService.parse(taskId);
-        if (result.retrying()) {
-            log.warn("Parse task {} will be retried by RocketMQ", taskId);
-            throw new IllegalStateException("Parse task retrying: " + taskId);
-        }
+        // Database next_attempt_time and outbox own retries; early broker redelivery is harmless.
+        log.debug("Pipeline wakeup task={},status={}", taskId, result.status());
     }
 }

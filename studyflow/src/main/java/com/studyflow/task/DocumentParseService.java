@@ -3,13 +3,7 @@ package com.studyflow.task;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.studyflow.ai.AiClient;
 import com.studyflow.ai.AiResult;
-import com.studyflow.document.AiSummaryEntity;
-import com.studyflow.document.AiSummaryMapper;
-import com.studyflow.document.DocumentChunkEntity;
-import com.studyflow.document.DocumentChunkMapper;
-import com.studyflow.document.DocumentEntity;
-import com.studyflow.document.DocumentMapper;
-import com.studyflow.document.DocumentStatus;
+import com.studyflow.document.*;
 import com.studyflow.document.parser.DocumentTextParser;
 import com.studyflow.document.parser.ParsedDocument;
 import com.studyflow.document.parser.TextChunker;
@@ -20,262 +14,190 @@ import com.studyflow.search.SearchService;
 import com.studyflow.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.redisson.api.RLock;
-import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+/** External calls run outside transactions; only stage results and next wakeup commit together. */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class DocumentParseService {
-
-    private final ParseTaskMapper parseTaskMapper;
-    private final DocumentMapper documentMapper;
-    private final DocumentChunkMapper documentChunkMapper;
-    private final AiSummaryMapper aiSummaryMapper;
-    private final StorageService storageService;
-    private final DocumentTextParser documentTextParser;
-    private final TextChunker textChunker;
-    private final AiClient aiClient;
-    private final EmbeddingClient embeddingClient;
+    private final PipelineStore store;
+    private final PipelineProperties properties;
+    private final ParseTaskMapper tasks;
+    private final DocumentMapper documents;
+    private final DocumentChunkMapper chunks;
+    private final AiSummaryMapper summaries;
+    private final StorageService storage;
+    private final DocumentTextParser parser;
+    private final TextChunker chunker;
+    private final AiClient ai;
+    private final EmbeddingClient embeddings;
     private final EmbeddingProperties embeddingProperties;
-    private final EmbeddingVectorCodec embeddingVectorCodec;
-    private final SearchService searchService;
-    private final RedissonClient redissonClient;
+    private final EmbeddingVectorCodec codec;
+    private final SearchService search;
 
-    @Transactional
     public ParseTaskResult parse(Long taskId) {
-        ParseTaskEntity task = parseTaskMapper.selectById(taskId);
+        ParseTaskEntity task = store.claim(taskId);
         if (task == null) {
-            log.warn("Parse task not found: {}", taskId);
-            return new ParseTaskResult(taskId, TaskStatus.FAILED);
+            ParseTaskEntity existing = tasks.selectById(taskId);
+            return new ParseTaskResult(taskId, existing == null ? TaskStatus.CANCELLED : existing.getStatus());
         }
-        if (!List.of(TaskStatus.PENDING, TaskStatus.RETRYING).contains(task.getStatus())) {
-            log.info("Skip parse task {}, status={}", taskId, task.getStatus());
-            return new ParseTaskResult(taskId, task.getStatus());
-        }
-
-        try {
-            markProcessing(task);
-            DocumentEntity document = documentMapper.selectById(task.getDocumentId());
-            if (document == null) {
-                throw new IllegalStateException("文档不存在：" + task.getDocumentId());
-            }
-
-            RLock lock = redissonClient.getLock("studyflow:parse:md5:" + document.getFileMd5());
-            if (!lock.tryLock(10, 120, TimeUnit.SECONDS)) {
-                throw new IllegalStateException("相同文件正在解析，请稍后重试");
-            }
-            try {
-                DocumentEntity reusable = findReusableParsedDocument(document);
-                if (reusable != null) {
-                    copyParsedResult(document, task, reusable);
-                    return new ParseTaskResult(taskId, task.getStatus());
-                }
-
-                byte[] bytes = storageService.getObject(document.getObjectKey());
-                ParsedDocument parsedDocument = documentTextParser.parseDocument(
-                        document.getOriginalFileName(), document.getFileType(), bytes);
-                List<TextChunker.ParsedChunk> parsedChunks = textChunker.chunkDocument(parsedDocument);
-                if (parsedChunks.isEmpty()) {
-                    throw new IllegalStateException("未解析到有效文本分片");
-                }
-                List<String> chunkContents = parsedChunks.stream()
-                        .map(TextChunker.ParsedChunk::content)
-                        .toList();
-                List<List<Double>> embeddings = createEmbeddings(chunkContents);
-                List<DocumentChunkEntity> savedChunks = refreshChunks(document, parsedChunks, embeddings);
-
-                AiResult aiResult = aiClient.summarize(document.getOriginalFileName(), String.join("\n", chunkContents));
-                saveSummary(document, aiResult);
-
-                document.setParseStatus(DocumentStatus.SUCCESS);
-                document.setParserType(parsedDocument.parserType());
-                document.setPageCount(parsedDocument.pageCount());
-                document.setOcrPageCount(parsedDocument.ocrPageCount());
-                document.setOcrElapsedMs(parsedDocument.ocrElapsedMs());
-                document.setSummary(aiResult.summary());
-                documentMapper.updateById(document);
-                searchService.indexChunks(document, savedChunks);
-
-                task.setStatus(TaskStatus.SUCCESS);
-                task.setErrorMessage(null);
-                task.setFinishedTime(LocalDateTime.now());
-                parseTaskMapper.updateById(task);
-            } finally {
-                if (lock.isHeldByCurrentThread()) {
-                    lock.unlock();
-                }
+        try (Heartbeat heartbeat = new Heartbeat(task)) {
+            DocumentEntity document = documents.selectById(task.getDocumentId());
+            if (document == null) throw new IllegalStateException("文档不存在");
+            switch (PipelineStage.valueOf(task.getStage())) {
+                case PARSE -> parseStage(task, document, heartbeat);
+                case EMBED -> embedStage(task, document, heartbeat);
+                case INDEX -> indexStage(task, document, heartbeat);
+                case CLEANUP -> cleanupStage(task, document, heartbeat);
             }
         } catch (Exception ex) {
-            markFailed(task, ex);
+            log.warn("Pipeline stage failed: task={},stage={},generation={}", task.getId(), task.getStage(), task.getGeneration(), ex);
+            store.fail(task, ex);
         }
-        return new ParseTaskResult(taskId, task.getStatus());
+        ParseTaskEntity current = tasks.selectById(taskId);
+        return new ParseTaskResult(taskId, current == null ? TaskStatus.CANCELLED : current.getStatus());
     }
 
-    private void markProcessing(ParseTaskEntity task) {
-        task.setStatus(TaskStatus.PROCESSING);
-        task.setStartedTime(LocalDateTime.now());
-        task.setErrorMessage(null);
-        parseTaskMapper.updateById(task);
+    private void parseStage(ParseTaskEntity task, DocumentEntity document, Heartbeat heartbeat) {
+        byte[] bytes = storage.getObject(document.getObjectKey());
+        ParsedDocument result = parser.parseDocument(document.getOriginalFileName(), document.getFileType(), bytes);
+        List<TextChunker.ParsedChunk> parsed = chunker.chunkDocument(result);
+        if (parsed.isEmpty()) throw new IllegalStateException("未解析到有效文本分片");
+        AiResult summary = ai.summarize(document.getOriginalFileName(),
+                String.join("\n", parsed.stream().map(TextChunker.ParsedChunk::content).toList()));
+        heartbeat.assertOwned();
+        store.checkpoint(task, current -> {
+            chunks.delete(Wrappers.<DocumentChunkEntity>lambdaQuery()
+                    .eq(DocumentChunkEntity::getDocumentId, current.getId())
+                    .eq(DocumentChunkEntity::getGeneration, task.getGeneration()));
+            for (int i = 0; i < parsed.size(); i++) {
+                TextChunker.ParsedChunk item = parsed.get(i);
+                DocumentChunkEntity chunk = new DocumentChunkEntity();
+                chunk.setDocumentId(current.getId());
+                chunk.setKnowledgeBaseId(current.getKnowledgeBaseId());
+                chunk.setUserId(current.getUserId());
+                chunk.setGeneration(task.getGeneration());
+                chunk.setChunkIndex(i);
+                chunk.setContent(item.content());
+                chunk.setCharCount(item.content().length());
+                chunk.setPageNumber(item.pageNumber());
+                chunk.setParserType(item.parserType());
+                chunk.setOcrConfidence(item.ocrConfidence());
+                chunks.insert(chunk);
+            }
+            current.setParserType(result.parserType());
+            current.setPageCount(result.pageCount());
+            current.setOcrPageCount(result.ocrPageCount());
+            current.setOcrElapsedMs(result.ocrElapsedMs());
+            current.setSummary(summary.summary());
+            documents.updateById(current);
+            saveSummary(current, summary);
+        });
+    }
 
-        DocumentEntity document = documentMapper.selectById(task.getDocumentId());
-        if (document != null) {
-            document.setParseStatus(DocumentStatus.PROCESSING);
-            documentMapper.updateById(document);
+    private void embedStage(ParseTaskEntity task, DocumentEntity document, Heartbeat heartbeat) {
+        assertEmbeddingVersion(task);
+        List<DocumentChunkEntity> items = stageChunks(task);
+        if (items.isEmpty()) throw new IllegalStateException("PARSE检查点分片不存在");
+        List<List<Double>> vectors = embeddingProperties.isEnabled()
+                ? embeddings.embedBatch(items.stream().map(DocumentChunkEntity::getContent).toList()) : List.of();
+        if (embeddingProperties.isEnabled() && vectors.size() != items.size()) throw new IllegalStateException("Embedding count mismatch");
+        for (List<Double> vector : vectors) {
+            if (vector == null || vector.size() != embeddingProperties.getDimension()
+                    || vector.stream().anyMatch(v -> v == null || !Double.isFinite(v))) {
+                throw new IllegalStateException("Embedding dimension or finite-value validation failed");
+            }
+        }
+        heartbeat.assertOwned();
+        store.checkpoint(task, current -> {
+            for (int i = 0; i < items.size(); i++) {
+                DocumentChunkEntity item = items.get(i);
+                if (!vectors.isEmpty()) {
+                    item.setEmbedding(codec.encode(vectors.get(i)));
+                    item.setEmbeddingModel(embeddings.model());
+                    item.setEmbeddingDim(vectors.get(i).size());
+                }
+                chunks.updateById(item);
+            }
+        });
+    }
+
+    private void indexStage(ParseTaskEntity task, DocumentEntity document, Heartbeat heartbeat) {
+        assertEmbeddingVersion(task);
+        List<DocumentChunkEntity> items = stageChunks(task);
+        if (items.isEmpty()) throw new IllegalStateException("EMBED检查点分片不存在");
+        search.indexChunks(document, items);
+        heartbeat.assertOwned();
+        boolean published = store.checkpoint(task, current -> {});
+        // A replacement worker may already have published this SAME generation. Never delete
+        // current-generation indexes merely because this token lost its lease. The durable
+        // retired-generation reconciler handles rebuild/deletion, including very late writes.
+        if (!published) log.info("Discard stale index publication: task={},generation={}", task.getId(), task.getGeneration());
+    }
+
+    private void cleanupStage(ParseTaskEntity task, DocumentEntity document, Heartbeat heartbeat) {
+        // Tombstone hides results immediately; physical index deletion is retryable and idempotent.
+        search.deleteDocumentChunks(document.getId());
+        heartbeat.assertOwned();
+        store.checkpoint(task, current -> {
+            chunks.delete(Wrappers.<DocumentChunkEntity>lambdaQuery().eq(DocumentChunkEntity::getDocumentId, document.getId()));
+            summaries.delete(Wrappers.<AiSummaryEntity>lambdaQuery().eq(AiSummaryEntity::getDocumentId, document.getId()));
+        });
+    }
+
+    private void assertEmbeddingVersion(ParseTaskEntity task) {
+        if ((task.getEmbeddingModel() != null && !task.getEmbeddingModel().equals(embeddings.model()))
+                || (task.getEmbeddingDimension() != null && task.getEmbeddingDimension() != embeddingProperties.getDimension())) {
+            throw new IllegalStateException("Embedding configuration changed; rebuild document to create a new generation");
         }
     }
 
-    private List<DocumentChunkEntity> refreshChunks(
-            DocumentEntity document,
-            List<TextChunker.ParsedChunk> chunks,
-            List<List<Double>> embeddings
-    ) {
-        documentChunkMapper.delete(Wrappers.<DocumentChunkEntity>lambdaQuery()
-                .eq(DocumentChunkEntity::getDocumentId, document.getId()));
-        List<DocumentChunkEntity> savedChunks = new ArrayList<>();
-        for (int i = 0; i < chunks.size(); i++) {
-            DocumentChunkEntity chunk = new DocumentChunkEntity();
-            chunk.setDocumentId(document.getId());
-            chunk.setKnowledgeBaseId(document.getKnowledgeBaseId());
-            chunk.setUserId(document.getUserId());
-            chunk.setChunkIndex(i);
-            TextChunker.ParsedChunk parsedChunk = chunks.get(i);
-            chunk.setContent(parsedChunk.content());
-            chunk.setCharCount(parsedChunk.content().length());
-            chunk.setPageNumber(parsedChunk.pageNumber());
-            chunk.setParserType(parsedChunk.parserType());
-            chunk.setOcrConfidence(parsedChunk.ocrConfidence());
-            applyEmbedding(chunk, embeddings, i);
-            documentChunkMapper.insert(chunk);
-            savedChunks.add(chunk);
-        }
-        return savedChunks;
+    private List<DocumentChunkEntity> stageChunks(ParseTaskEntity task) {
+        return chunks.selectList(Wrappers.<DocumentChunkEntity>lambdaQuery()
+                .eq(DocumentChunkEntity::getDocumentId, task.getDocumentId())
+                .eq(DocumentChunkEntity::getGeneration, task.getGeneration())
+                .orderByAsc(DocumentChunkEntity::getChunkIndex));
     }
 
-    private List<List<Double>> createEmbeddings(List<String> chunks) {
-        if (!embeddingProperties.isEnabled() || chunks == null || chunks.isEmpty()) {
-            return List.of();
-        }
-        List<List<Double>> embeddings = embeddingClient.embedBatch(chunks);
-        if (embeddings.size() != chunks.size()) {
-            throw new IllegalStateException("Embedding count mismatch: expected "
-                    + chunks.size() + ", got " + embeddings.size());
-        }
-        return embeddings;
-    }
-
-    private void applyEmbedding(DocumentChunkEntity chunk, List<List<Double>> embeddings, int index) {
-        if (embeddings == null || embeddings.isEmpty() || index >= embeddings.size()) {
-            return;
-        }
-        List<Double> vector = embeddings.get(index);
-        if (vector == null || vector.isEmpty()) {
-            return;
-        }
-        chunk.setEmbedding(embeddingVectorCodec.encode(vector));
-        chunk.setEmbeddingModel(embeddingClient.model());
-        chunk.setEmbeddingDim(vector.size());
-    }
-
-    private DocumentEntity findReusableParsedDocument(DocumentEntity current) {
-        return documentMapper.selectOne(Wrappers.<DocumentEntity>lambdaQuery()
-                .eq(DocumentEntity::getFileMd5, current.getFileMd5())
-                .eq(DocumentEntity::getParseStatus, DocumentStatus.SUCCESS)
-                .ne(DocumentEntity::getId, current.getId())
-                .orderByDesc(DocumentEntity::getCreateTime)
-                .last("LIMIT 1"));
-    }
-
-    private void copyParsedResult(DocumentEntity document, ParseTaskEntity task, DocumentEntity reusable) {
-        List<DocumentChunkEntity> copiedChunks = documentChunkMapper.selectList(Wrappers.<DocumentChunkEntity>lambdaQuery()
-                        .eq(DocumentChunkEntity::getDocumentId, reusable.getId())
-                        .orderByAsc(DocumentChunkEntity::getChunkIndex))
-                .stream()
-                .map(sourceChunk -> {
-                    DocumentChunkEntity targetChunk = new DocumentChunkEntity();
-                    targetChunk.setDocumentId(document.getId());
-                    targetChunk.setKnowledgeBaseId(document.getKnowledgeBaseId());
-                    targetChunk.setUserId(document.getUserId());
-                    targetChunk.setChunkIndex(sourceChunk.getChunkIndex());
-                    targetChunk.setContent(sourceChunk.getContent());
-                    targetChunk.setCharCount(sourceChunk.getCharCount());
-                    targetChunk.setPageNumber(sourceChunk.getPageNumber());
-                    targetChunk.setParserType(sourceChunk.getParserType());
-                    targetChunk.setOcrConfidence(sourceChunk.getOcrConfidence());
-                    targetChunk.setEmbedding(sourceChunk.getEmbedding());
-                    targetChunk.setEmbeddingModel(sourceChunk.getEmbeddingModel());
-                    targetChunk.setEmbeddingDim(sourceChunk.getEmbeddingDim());
-                    documentChunkMapper.insert(targetChunk);
-                    return targetChunk;
-                })
-                .toList();
-
-        AiSummaryEntity sourceSummary = aiSummaryMapper.selectOne(Wrappers.<AiSummaryEntity>lambdaQuery()
-                .eq(AiSummaryEntity::getDocumentId, reusable.getId()));
-        if (sourceSummary != null) {
-            AiSummaryEntity targetSummary = new AiSummaryEntity();
-            targetSummary.setDocumentId(document.getId());
-            targetSummary.setUserId(document.getUserId());
-            targetSummary.setSummary(sourceSummary.getSummary());
-            targetSummary.setKeywords(sourceSummary.getKeywords());
-            targetSummary.setProvider(sourceSummary.getProvider());
-            aiSummaryMapper.insert(targetSummary);
-        }
-
-        document.setParseStatus(DocumentStatus.SUCCESS);
-        document.setParserType(reusable.getParserType());
-        document.setPageCount(reusable.getPageCount());
-        document.setOcrPageCount(reusable.getOcrPageCount());
-        document.setOcrElapsedMs(reusable.getOcrElapsedMs());
-        document.setSummary(sourceSummary == null ? reusable.getSummary() : sourceSummary.getSummary());
-        documentMapper.updateById(document);
-        searchService.indexChunks(document, copiedChunks);
-
-        task.setStatus(TaskStatus.SUCCESS);
-        task.setErrorMessage(null);
-        task.setFinishedTime(LocalDateTime.now());
-        parseTaskMapper.updateById(task);
-    }
-
-    private void saveSummary(DocumentEntity document, AiResult aiResult) {
-        AiSummaryEntity old = aiSummaryMapper.selectOne(Wrappers.<AiSummaryEntity>lambdaQuery()
-                .eq(AiSummaryEntity::getDocumentId, document.getId()));
-        if (old == null) {
-            AiSummaryEntity summary = new AiSummaryEntity();
+    private void saveSummary(DocumentEntity document, AiResult result) {
+        AiSummaryEntity summary = summaries.selectOne(Wrappers.<AiSummaryEntity>lambdaQuery().eq(AiSummaryEntity::getDocumentId, document.getId()));
+        boolean insert = summary == null;
+        if (insert) {
+            summary = new AiSummaryEntity();
             summary.setDocumentId(document.getId());
             summary.setUserId(document.getUserId());
-            summary.setSummary(aiResult.summary());
-            summary.setKeywords(aiResult.keywords());
-            summary.setProvider("mock");
-            aiSummaryMapper.insert(summary);
-        } else {
-            old.setSummary(aiResult.summary());
-            old.setKeywords(aiResult.keywords());
-            old.setProvider("mock");
-            aiSummaryMapper.updateById(old);
         }
+        summary.setSummary(result.summary());
+        summary.setKeywords(result.keywords());
+        summary.setProvider("configured");
+        if (insert) summaries.insert(summary); else summaries.updateById(summary);
     }
 
-    private void markFailed(ParseTaskEntity task, Exception ex) {
-        log.error("Parse task failed, taskId={}", task.getId(), ex);
-        int nextRetry = task.getRetryCount() == null ? 1 : task.getRetryCount() + 1;
-        task.setRetryCount(nextRetry);
-        task.setStatus(nextRetry < task.getMaxRetryCount() ? TaskStatus.RETRYING : TaskStatus.FAILED);
-        task.setErrorMessage(ex.getMessage());
-        task.setFinishedTime(LocalDateTime.now());
-        parseTaskMapper.updateById(task);
-
-        DocumentEntity document = documentMapper.selectById(task.getDocumentId());
-        if (document != null) {
-            document.setParseStatus(TaskStatus.FAILED.equals(task.getStatus()) ? DocumentStatus.FAILED : DocumentStatus.PENDING);
-            documentMapper.updateById(document);
+    private final class Heartbeat implements AutoCloseable {
+        private final AtomicBoolean owned = new AtomicBoolean(true);
+        private final ScheduledExecutorService scheduler;
+        private Heartbeat(ParseTaskEntity task) {
+            scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread thread = new Thread(r, "pipeline-lease-" + task.getId());
+                thread.setDaemon(true);
+                return thread;
+            });
+            int interval = Math.max(1, properties.leaseSeconds() / 3);
+            scheduler.scheduleAtFixedRate(() -> {
+                try { if (!store.renew(task)) owned.set(false); }
+                catch (Exception ex) { owned.set(false); log.warn("Lost pipeline lease: {}", task.getId()); }
+            }, interval, interval, TimeUnit.SECONDS);
         }
+        private void assertOwned() {
+            if (!owned.get()) throw new IllegalStateException("Worker lease lost; stale result discarded");
+        }
+        @Override public void close() { scheduler.shutdownNow(); }
     }
 }

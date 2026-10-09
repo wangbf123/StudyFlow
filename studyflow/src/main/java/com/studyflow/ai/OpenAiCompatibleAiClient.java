@@ -63,14 +63,24 @@ public class OpenAiCompatibleAiClient implements AiClient {
                 .contentType(MediaType.APPLICATION_JSON)
                 .header("Authorization", "Bearer " + properties.getApiKey())
                 .body(body)
-                .retrieve()
-                .body(OpenAiChatResponse.class);
+                .exchange((clientRequest, clientResponse) -> {
+                    if (clientResponse.getStatusCode().isError()) {
+                        throw new BusinessException(502, "AI provider failed: HTTP " + clientResponse.getStatusCode().value());
+                    }
+                    int limit = Math.min(Math.max(properties.getMaxResponseBytes(), 1024), 4_194_304);
+                    byte[] bytes = clientResponse.getBody().readNBytes(limit + 1);
+                    if (bytes.length > limit) throw new BusinessException(502, "AI response exceeds configured size limit");
+                    return objectMapper.readValue(bytes, OpenAiChatResponse.class);
+                });
 
         if (response == null || response.choices() == null || response.choices().isEmpty()) {
             throw new BusinessException(502, "AI provider returned an empty response");
         }
         Choice first = response.choices().getFirst();
         String content = first.message() == null ? null : first.message().content();
+        if (content != null && content.length() > properties.getMaxOutputChars()) {
+            throw new BusinessException(502, "AI output exceeds configured size limit");
+        }
         if (content == null || content.isBlank()) {
             throw new BusinessException(502, "AI provider returned an empty answer");
         }
@@ -120,7 +130,7 @@ public class OpenAiCompatibleAiClient implements AiClient {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(
                             clientResponse.getBody(), StandardCharsets.UTF_8))) {
                         String line;
-                        while ((line = reader.readLine()) != null) {
+                        while ((line = readBoundedLine(reader)) != null) {
                             if (!line.startsWith("data:")) {
                                 continue;
                             }
@@ -141,6 +151,19 @@ public class OpenAiCompatibleAiClient implements AiClient {
         Integer completion = completionTokens.get() < 0 ? null : completionTokens.get();
         onChunk.accept(AiStreamChunk.done(responseModel.get(), prompt, completion));
         return new AiChatResponse(content.toString(), responseModel.get(), prompt, completion);
+    }
+
+    private String readBoundedLine(BufferedReader reader) throws java.io.IOException {
+        StringBuilder line = new StringBuilder();
+        int limit = Math.min(Math.max(properties.getMaxResponseBytes(), 1024), 4_194_304);
+        int ch;
+        while ((ch = reader.read()) != -1) {
+            if (ch == '\n') return line.toString();
+            if (ch == '\r') continue;
+            if (line.length() >= limit) throw new BusinessException(502, "AI event exceeds configured size limit");
+            line.append((char) ch);
+        }
+        return line.isEmpty() ? null : line.toString();
     }
 
     private void validateConfig() {
@@ -207,6 +230,9 @@ public class OpenAiCompatibleAiClient implements AiClient {
             String deltaContent = delta == null ? null : delta.content();
             if (deltaContent == null || deltaContent.isEmpty()) {
                 return;
+            }
+            if (content.length() + deltaContent.length() > properties.getMaxOutputChars()) {
+                throw new BusinessException(502, "AI stream exceeds configured size limit");
             }
             content.append(deltaContent);
             onChunk.accept(AiStreamChunk.delta(deltaContent, responseModel.get()));

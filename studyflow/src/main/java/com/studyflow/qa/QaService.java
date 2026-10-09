@@ -11,7 +11,19 @@ import com.studyflow.document.DocumentChunkEntity;
 import com.studyflow.document.DocumentChunkMapper;
 import com.studyflow.kb.KnowledgeBaseEntity;
 import com.studyflow.kb.KnowledgeBaseService;
-import com.studyflow.rag.RagAnswer;
+import com.studyflow.rag.VerifiedAnswer;
+import com.studyflow.rag.EvidenceAnswerService;
+import com.studyflow.rag.EvidenceAnswerValidator;
+import com.studyflow.rag.GroundedClaim;
+import com.studyflow.rag.EvidenceSpan;
+import com.studyflow.document.DocumentMapper;
+import com.studyflow.document.DocumentEntity;
+import com.studyflow.document.DocumentStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import java.util.ArrayList;
+import java.util.Objects;
 import com.studyflow.rag.RagAnswerValidator;
 import com.studyflow.rag.RagPrompt;
 import com.studyflow.rag.RagPromptBuilder;
@@ -49,6 +61,11 @@ public class QaService {
     private final AiProperties aiProperties;
     private final DocumentChunkMapper documentChunkMapper;
     private final Executor qaTaskExecutor;
+    private final EvidenceAnswerService evidenceAnswerService;
+    private final QaClaimMapper qaClaimMapper;
+    private final DocumentMapper documentMapper;
+    private final JdbcTemplate jdbcTemplate;
+    private final TransactionTemplate writeTransaction;
 
     public QaService(
             KnowledgeBaseService knowledgeBaseService,
@@ -63,6 +80,11 @@ public class QaService {
             AiClient aiClient,
             AiProperties aiProperties,
             DocumentChunkMapper documentChunkMapper,
+            EvidenceAnswerService evidenceAnswerService,
+            QaClaimMapper qaClaimMapper,
+            DocumentMapper documentMapper,
+            JdbcTemplate jdbcTemplate,
+            PlatformTransactionManager transactionManager,
             @Qualifier("qaTaskExecutor") Executor qaTaskExecutor
     ) {
         this.knowledgeBaseService = knowledgeBaseService;
@@ -78,6 +100,11 @@ public class QaService {
         this.aiProperties = aiProperties;
         this.documentChunkMapper = documentChunkMapper;
         this.qaTaskExecutor = qaTaskExecutor;
+        this.evidenceAnswerService = evidenceAnswerService;
+        this.qaClaimMapper = qaClaimMapper;
+        this.documentMapper = documentMapper;
+        this.jdbcTemplate = jdbcTemplate;
+        this.writeTransaction = new TransactionTemplate(transactionManager);
     }
 
     public QaSessionResponse createSession(Long userId, QaCreateSessionRequest request) {
@@ -182,8 +209,18 @@ public class QaService {
                 .eq(DocumentChunkEntity::getId, citation.getChunkId())
                 .eq(DocumentChunkEntity::getUserId, userId)
                 .eq(DocumentChunkEntity::getKnowledgeBaseId, message.getKnowledgeBaseId()));
-        if (chunk == null) {
-            throw new BusinessException("Citation chunk not found or access denied");
+        DocumentEntity doc = documentMapper.selectById(citation.getDocumentId());
+        if (doc == null || DocumentStatus.DELETED.equals(doc.getParseStatus())
+                || !Objects.equals(doc.getUserId(), userId)
+                || !Objects.equals(doc.getKnowledgeBaseId(), message.getKnowledgeBaseId())) {
+            throw new BusinessException(404, "Citation document no longer available or access denied");
+        }
+        boolean current = chunk != null && (citation.getContentHash() == null
+                || (Objects.equals(citation.getDocumentGeneration(), doc.getGeneration())
+                && Objects.equals(chunk.getGeneration(), doc.getGeneration())
+                && citation.getContentHash().equals(EvidenceAnswerValidator.sha256(chunk.getContent()))));
+        if (chunk == null && citation.getQuote() == null) {
+            throw new BusinessException(404, "Citation chunk no longer available");
         }
         return new QaCitationDetailResponse(
                 citation.getId(),
@@ -191,13 +228,15 @@ public class QaService {
                 citation.getDocumentId(),
                 citation.getChunkId(),
                 citation.getChunkIndex(),
-                chunk.getPageNumber(),
-                chunk.getParserType(),
-                chunk.getOcrConfidence(),
+                citation.getPageNumber(),
+                citation.getParserType(),
+                chunk == null ? null : chunk.getOcrConfidence(),
                 citation.getDocumentName(),
-                chunk.getContent(),
+                current ? chunk.getContent() : citation.getQuote(),
                 citation.getContentPreview(),
-                citation.getScore()
+                citation.getScore(), citation.getQuote(), current ? citation.getCharStart() : null,
+                current ? citation.getCharEnd() : null, citation.getDocumentGeneration(), citation.getContentHash(),
+                citation.getVerificationStatus(), current ? "CURRENT" : "STALE_VERSION"
         );
     }
 
@@ -258,36 +297,13 @@ public class QaService {
                     aiProperties.getModel(),
                     aiProperties.getTemperature()
             ));
+            VerifiedAnswer trustedAnswer = evidenceAnswerService.verify(aiResponse.content(), prompt, userId, knowledgeBase.getId());
             long latencyMs = System.currentTimeMillis() - start;
-            RagAnswer trustedAnswer = ragAnswerValidator.parseAndValidate(aiResponse.content(), prompt);
-            QaMessageEntity assistantMessage = saveMessage(
-                    session,
-                    QaMessageRole.ASSISTANT,
-                    QaMessageStatus.SUCCESS,
-                    trustedAnswer.answer(),
-                    aiResponse.model(),
-                    aiResponse.promptTokens(),
-                    aiResponse.completionTokens(),
-                    latencyMs,
-                    null
-            );
-            List<QaCitationResponse> citations = saveCitations(assistantMessage.getId(), trustedAnswer.citedChunks());
+            PersistedAnswer saved = persistVerified(session, trustedAnswer, aiResponse.model(),
+                    aiResponse.promptTokens(), aiResponse.completionTokens(), latencyMs);
             touchSession(session);
-            return new QaAskResponse(
-                    session.getId(),
-                    userMessage.getId(),
-                    assistantMessage.getId(),
-                    trustedAnswer.answer(),
-                    rewrite.searchQuery(),
-                    aiResponse.model(),
-                    aiResponse.promptTokens(),
-                    aiResponse.completionTokens(),
-                    latencyMs,
-                    trustedAnswer.structuredOutput(),
-                    citations.size(),
-                    trustedAnswer.rejectedCitationCount(),
-                    citations
-            );
+            return verifiedResponse(session, userMessage, saved, trustedAnswer, rewrite.searchQuery(),
+                    aiResponse.model(), aiResponse.promptTokens(), aiResponse.completionTokens(), latencyMs);
         } catch (Exception ex) {
             long latencyMs = System.currentTimeMillis() - start;
             saveMessage(
@@ -383,44 +399,23 @@ public class QaService {
             if (aiResponse.completionTokens() != null) {
                 completionTokens.set(aiResponse.completionTokens());
             }
+            send(emitter, "verification_start", new QaStreamEventResponse("verification_start", "正在核对结论与原文证据"));
+            VerifiedAnswer trustedAnswer = evidenceAnswerService.verify(rawAnswer.toString(), prompt, userId, knowledgeBase.getId());
             long latencyMs = System.currentTimeMillis() - start;
-            RagAnswer trustedAnswer = ragAnswerValidator.parseAndValidate(rawAnswer.toString(), prompt);
+            PersistedAnswer saved = persistVerified(session, trustedAnswer, modelName.get(),
+                    nullableToken(promptTokens), nullableToken(completionTokens), latencyMs);
+            // Unverified provider output is never emitted or stored as a visible answer.
             streamDelta(emitter, trustedAnswer.answer());
-            QaMessageEntity assistantMessage = saveMessage(
-                    session,
-                    QaMessageRole.ASSISTANT,
-                    QaMessageStatus.SUCCESS,
-                    trustedAnswer.answer(),
-                    modelName.get(),
-                    nullableToken(promptTokens),
-                    nullableToken(completionTokens),
-                    latencyMs,
-                    null
-            );
-            List<QaCitationResponse> citations = saveCitations(assistantMessage.getId(), trustedAnswer.citedChunks());
             touchSession(session);
-            return new QaAskResponse(
-                    session.getId(),
-                    userMessage.getId(),
-                    assistantMessage.getId(),
-                    trustedAnswer.answer(),
-                    rewrite.searchQuery(),
-                    modelName.get(),
-                    nullableToken(promptTokens),
-                    nullableToken(completionTokens),
-                    latencyMs,
-                    trustedAnswer.structuredOutput(),
-                    citations.size(),
-                    trustedAnswer.rejectedCitationCount(),
-                    citations
-            );
+            return verifiedResponse(session, userMessage, saved, trustedAnswer, rewrite.searchQuery(),
+                    modelName.get(), nullableToken(promptTokens), nullableToken(completionTokens), latencyMs);
         } catch (Exception ex) {
             long latencyMs = System.currentTimeMillis() - start;
             saveMessage(
                     session,
                     QaMessageRole.ASSISTANT,
                     QaMessageStatus.FAILED,
-                    rawAnswer.isEmpty() ? "AI service failed to generate an answer." : rawAnswer.toString(),
+                    "AI service failed; no unverified answer was published.",
                     modelName.get(),
                     nullableToken(promptTokens),
                     nullableToken(completionTokens),
@@ -455,6 +450,9 @@ public class QaService {
             completionTokens.set(chunk.completionTokens());
         }
         if (!chunk.done() && chunk.delta() != null && !chunk.delta().isEmpty()) {
+            if (answer.length() + chunk.delta().length() > aiProperties.getMaxOutputChars()) {
+                throw new BusinessException(502, "AI stream exceeds configured size limit");
+            }
             answer.append(chunk.delta());
         }
     }
@@ -496,6 +494,7 @@ public class QaService {
         if (session == null) {
             throw new BusinessException("QA session not found or access denied");
         }
+        knowledgeBaseService.getOwnedActive(userId, session.getKnowledgeBaseId());
         return session;
     }
 
@@ -506,6 +505,7 @@ public class QaService {
         if (message == null) {
             throw new BusinessException("QA message not found or access denied");
         }
+        knowledgeBaseService.getOwnedActive(userId, message.getKnowledgeBaseId());
         return message;
     }
 
@@ -536,24 +536,98 @@ public class QaService {
         return message;
     }
 
-    private List<QaCitationResponse> saveCitations(Long messageId, List<RetrievedChunk> chunks) {
-        return chunks.stream()
-                .map(chunk -> {
+    private PersistedAnswer persistVerified(QaSessionEntity session, VerifiedAnswer answer, String model,
+            Integer promptTokens, Integer completionTokens, Long latencyMs) {
+        return writeTransaction.execute(status -> {
+            // Share-lock source rows in stable order for the short persistence transaction.
+            // A concurrent rebuild/deletion cannot commit between the final provenance check and saving.
+            var spans = answer.claims().stream().flatMap(claim -> claim.evidence().stream())
+                    .sorted(java.util.Comparator.comparing((EvidenceSpan span) -> span.chunk().documentId())
+                            .thenComparing(span -> span.chunk().chunkId())).toList();
+            for (Long documentId : spans.stream().map(span -> span.chunk().documentId()).distinct().sorted().toList()) {
+                List<Long> locked = jdbcTemplate.queryForList("""
+                        SELECT id FROM document WHERE id=? AND user_id=? AND knowledge_base_id=?
+                        AND parse_status='SUCCESS' FOR SHARE
+                        """, Long.class, documentId, session.getUserId(), session.getKnowledgeBaseId());
+                if (locked.size() != 1) throw new BusinessException(409, "Evidence document changed; retry the question");
+            }
+            // Match pipeline's document -> knowledge-base -> chunk lock order.
+            List<Long> ownedKb = jdbcTemplate.queryForList("""
+                    SELECT id FROM knowledge_base WHERE id=? AND user_id=? AND status='ACTIVE' FOR SHARE
+                    """, Long.class, session.getKnowledgeBaseId(), session.getUserId());
+            if (ownedKb.size() != 1) throw new BusinessException(409, "Knowledge base changed during verification");
+            for (EvidenceSpan span : spans) {
+                List<String> current = jdbcTemplate.queryForList("""
+                        SELECT c.content FROM document_chunk c
+                        WHERE c.id=? AND c.user_id=? AND c.knowledge_base_id=? AND c.generation=?
+                        AND EXISTS (SELECT 1 FROM document d WHERE d.id=c.document_id AND d.generation=c.generation)
+                        FOR SHARE
+                        """, String.class, span.chunk().chunkId(), session.getUserId(), session.getKnowledgeBaseId(), span.generation());
+                if (current.size() != 1 || !span.contentHash().equals(EvidenceAnswerValidator.sha256(current.getFirst()))) {
+                    throw new BusinessException(409, "Evidence changed during verification; retry the question");
+                }
+            }
+            QaMessageEntity message = saveMessage(session, QaMessageRole.ASSISTANT, QaMessageStatus.SUCCESS,
+                    answer.answer(), model, promptTokens, completionTokens, latencyMs, null);
+            message.setAnswerStatus(answer.status());
+            message.setVerificationMode(answer.mode());
+            message.setVerifierModel(answer.verifierModel());
+            message.setVerificationLatencyMs(answer.verificationLatencyMs());
+            message.setVerificationPromptTokens(answer.verificationPromptTokens());
+            message.setVerificationCompletionTokens(answer.verificationCompletionTokens());
+            message.setRejectedClaimCount(answer.rejectedClaims());
+            qaMessageMapper.updateById(message);
+            List<QaCitationResponse> citations = new ArrayList<>();
+            List<QaClaimResponse> claims = new ArrayList<>();
+            for (GroundedClaim claim : answer.claims()) {
+                QaClaimEntity entity = new QaClaimEntity();
+                entity.setMessageId(message.getId());
+                entity.setOrdinal(claim.index());
+                entity.setText(claim.text());
+                entity.setVerificationStatus(answer.status());
+                qaClaimMapper.insert(entity);
+                List<QaCitationResponse> evidence = new ArrayList<>();
+                for (EvidenceSpan span : claim.evidence()) {
+                    var chunk = span.chunk();
                     QaCitationEntity citation = new QaCitationEntity();
-                    citation.setMessageId(messageId);
+                    citation.setMessageId(message.getId());
+                    citation.setClaimId(entity.getId());
+                    citation.setSourceId(span.sourceId());
                     citation.setDocumentId(chunk.documentId());
                     citation.setChunkId(chunk.chunkId());
                     citation.setChunkIndex(chunk.chunkIndex());
                     citation.setPageNumber(chunk.pageNumber());
                     citation.setParserType(chunk.parserType());
                     citation.setDocumentName(chunk.fileName());
-                    citation.setContentPreview(preview(chunk.content(), ragProperties.getCitationPreviewChars()));
+                    citation.setContentPreview(preview(span.quote(), Math.min(1000, ragProperties.getCitationPreviewChars())));
                     citation.setScore(chunk.score());
+                    citation.setQuote(span.quote());
+                    citation.setCharStart(span.start());
+                    citation.setCharEnd(span.end());
+                    citation.setContentHash(span.contentHash());
+                    citation.setDocumentGeneration(span.generation());
+                    citation.setVerificationStatus(answer.status());
                     qaCitationMapper.insert(citation);
-                    return QaCitationResponse.from(citation);
-                })
-                .toList();
+                    evidence.add(QaCitationResponse.from(citation));
+                }
+                citations.addAll(evidence);
+                claims.add(new QaClaimResponse(entity.getId(), entity.getText(), entity.getVerificationStatus(), List.copyOf(evidence)));
+            }
+            return new PersistedAnswer(message, List.copyOf(citations), List.copyOf(claims));
+        });
     }
+
+    private QaAskResponse verifiedResponse(QaSessionEntity session, QaMessageEntity userMessage,
+            PersistedAnswer saved, VerifiedAnswer answer, String rewrittenQuery, String model,
+            Integer promptTokens, Integer completionTokens, long latencyMs) {
+        return new QaAskResponse(session.getId(), userMessage.getId(), saved.message().getId(), answer.answer(),
+                rewrittenQuery, model, promptTokens, completionTokens, latencyMs, answer.structured(),
+                saved.citations().size(), answer.rejectedClaims(), saved.citations(), answer.status(), answer.mode(),
+                answer.verifierModel(), answer.verificationLatencyMs(), answer.verificationPromptTokens(),
+                answer.verificationCompletionTokens(), answer.rejectedClaims(), saved.claims());
+    }
+
+    private record PersistedAnswer(QaMessageEntity message, List<QaCitationResponse> citations, List<QaClaimResponse> claims) { }
 
     private QaMessageResponse toMessageResponse(QaMessageEntity message) {
         List<QaCitationResponse> citations = qaCitationMapper.selectList(Wrappers.<QaCitationEntity>lambdaQuery()
@@ -574,7 +648,13 @@ public class QaService {
                 message.getLatencyMs(),
                 message.getErrorMessage(),
                 message.getCreateTime(),
-                citations
+                citations, message.getAnswerStatus(), message.getVerificationMode(), message.getVerifierModel(),
+                message.getVerificationLatencyMs(), message.getVerificationPromptTokens(),
+                message.getVerificationCompletionTokens(), message.getRejectedClaimCount(),
+                qaClaimMapper.selectList(Wrappers.<QaClaimEntity>lambdaQuery()
+                        .eq(QaClaimEntity::getMessageId, message.getId()).orderByAsc(QaClaimEntity::getOrdinal)).stream()
+                        .map(claim -> new QaClaimResponse(claim.getId(), claim.getText(), claim.getVerificationStatus(),
+                                citations.stream().filter(c -> Objects.equals(c.claimId(), claim.getId())).toList())).toList()
         );
     }
 

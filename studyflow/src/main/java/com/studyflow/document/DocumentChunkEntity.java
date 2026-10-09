@@ -18,6 +18,7 @@ public class DocumentChunkEntity {
     private Long knowledgeBaseId;
     private Long userId;
     private Integer chunkIndex;
+    private Long generation;
     private String content;
     private Integer charCount;
     private Integer pageNumber;

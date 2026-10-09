@@ -2,6 +2,7 @@ package com.studyflow.document;
 
 public final class DocumentStatus {
 
+    public static final String DELETED = "DELETED";
     public static final String PENDING = "PENDING";
     public static final String PROCESSING = "PROCESSING";
     public static final String SUCCESS = "SUCCESS";

@@ -12,7 +12,7 @@ public class EmbeddingProperties {
     private String baseUrl;
     private String apiKey;
     private String model = "mock-embedding";
-    private int dimension = 256;
+    private int dimension = 512;
     private int batchSize = 16;
     private int maxInputChars = 8000;
     private int timeoutSeconds = 60;

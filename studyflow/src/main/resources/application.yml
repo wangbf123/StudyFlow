@@ -21,6 +21,7 @@ spring:
     enabled: true
     baseline-on-migrate: true
     baseline-version: 0
+    out-of-order: true
     locations: classpath:db/migration
   data:
     redis:
@@ -58,6 +59,17 @@ rocketmq:
     group: studyflow-parse-consumer-group
 
 studyflow:
+  pipeline:
+    scheduler-delay-ms: ${STUDYFLOW_PIPELINE_DELAY_MS:1000}
+    lease-seconds: ${STUDYFLOW_PIPELINE_LEASE_SECONDS:60}
+    max-retry-delay-seconds: ${STUDYFLOW_PIPELINE_MAX_RETRY_DELAY:300}
+    batch-size: ${STUDYFLOW_PIPELINE_BATCH_SIZE:20}
+  search:
+    index: ${STUDYFLOW_SEARCH_INDEX:studyflow_document_chunk_v2}
+    mode: ${STUDYFLOW_SEARCH_MODE:RRF}
+    rrf-constant: 60
+    knn-candidates: 200
+    max-candidates: 200
   mq:
     # rocketmq: upload creates parse_task, producer sends task id, listener consumes and parses.
     # async: local fallback without RocketMQ.
@@ -69,8 +81,8 @@ studyflow:
     secret-key: studyflow123
     bucket: studyflow-docs
   document:
-    chunk-size: 1000
-    chunk-overlap: 120
+    chunk-size: ${STUDYFLOW_CHUNK_SIZE:400}
+    chunk-overlap: ${STUDYFLOW_CHUNK_OVERLAP:60}
   ocr:
     # Normal text PDFs stay on PDFBox; only images and low-text PDF pages call PaddleOCR.
     enabled: ${STUDYFLOW_OCR_ENABLED:true}
@@ -96,7 +108,7 @@ studyflow:
     base-url: ${STUDYFLOW_EMBEDDING_BASE_URL:}
     api-key: ${STUDYFLOW_EMBEDDING_API_KEY:}
     model: ${STUDYFLOW_EMBEDDING_MODEL:mock-embedding}
-    dimension: ${STUDYFLOW_EMBEDDING_DIMENSION:256}
+    dimension: ${STUDYFLOW_EMBEDDING_DIMENSION:512}
     batch-size: 16
     max-input-chars: 8000
     timeout-seconds: 60

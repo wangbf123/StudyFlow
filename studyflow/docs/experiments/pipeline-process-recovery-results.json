@@ -1,0 +1,21 @@
+{
+  "status": "PASS",
+  "mq_mode": "async",
+  "signal": "SIGKILL",
+  "interrupted_stage": "PARSE",
+  "interrupted_status": "PROCESSING",
+  "database_stage_after_kill": "PARSE",
+  "database_status_after_kill": "PROCESSING",
+  "login_after_restart": "Reauthenticated; default session storage is process-local.",
+  "final_stage": "INDEX",
+  "final_status": "SUCCESS",
+  "final_stage_retry_count": 0,
+  "retry_counter_note": "Counter resets at successful stage checkpoints; final INDEX count does not measure earlier lease recovery.",
+  "generation": "1",
+  "chunk_count": 45,
+  "duplicate_chunk_indices": 0,
+  "recovery_seconds": 65.955,
+  "lease_seconds": 60,
+  "embedding_model": "BAAI/bge-small-zh-v1.5@7999e1d3359715c523056ef9478215996d62a620",
+  "scope": "One isolated Java worker process; real MySQL/MinIO/Elasticsearch/BGE. No RocketMQ cluster failure or capacity measurement."
+}

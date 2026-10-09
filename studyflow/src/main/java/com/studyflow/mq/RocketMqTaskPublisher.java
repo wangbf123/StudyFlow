@@ -1,6 +1,8 @@
 package com.studyflow.mq;
 
 import com.studyflow.task.TaskPublisher;
+import org.apache.rocketmq.client.producer.SendResult;
+import org.apache.rocketmq.client.producer.SendStatus;
 import lombok.RequiredArgsConstructor;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.springframework.beans.factory.annotation.Value;
@@ -19,6 +21,9 @@ public class RocketMqTaskPublisher implements TaskPublisher {
 
     @Override
     public void publishParseTask(Long taskId) {
-        rocketMQTemplate.convertAndSend(parseTopic, taskId);
+        SendResult result = rocketMQTemplate.syncSend(parseTopic, taskId, 10000);
+        if (result == null || result.getSendStatus() != SendStatus.SEND_OK) {
+            throw new IllegalStateException("RocketMQ did not confirm SEND_OK: " + (result == null ? "no result" : result.getSendStatus()));
+        }
     }
 }

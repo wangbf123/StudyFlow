@@ -5,15 +5,15 @@ import com.studyflow.common.BusinessException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 @Service
 @RequiredArgsConstructor
 public class TaskService {
 
     private final ParseTaskMapper parseTaskMapper;
-    private final TaskPublisher taskPublisher;
+    private final PipelineStore pipeline;
+    private final JdbcTemplate jdbc;
 
     public TaskResponse get(Long userId, Long taskId) {
         return TaskResponse.from(getOwnedTask(userId, taskId));
@@ -25,26 +25,18 @@ public class TaskService {
         if (!TaskStatus.FAILED.equals(task.getStatus()) && !TaskStatus.RETRYING.equals(task.getStatus())) {
             throw new BusinessException("只有失败或待重试任务可以手动重试");
         }
-        task.setStatus(TaskStatus.PENDING);
-        task.setErrorMessage(null);
-        task.setStartedTime(null);
-        task.setFinishedTime(null);
-        parseTaskMapper.updateById(task);
-        publishAfterCommit(task.getId());
-        return TaskResponse.from(task);
-    }
-
-    private void publishAfterCommit(Long taskId) {
-        if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    taskPublisher.publishParseTask(taskId);
-                }
-            });
-        } else {
-            taskPublisher.publishParseTask(taskId);
-        }
+        int changed = jdbc.update("""
+                UPDATE parse_task t JOIN document d ON d.id=t.document_id
+                JOIN knowledge_base k ON k.id=d.knowledge_base_id
+                SET t.status='PENDING',t.retry_count=0,t.error_message=NULL,t.claim_token=NULL,t.lease_until=NULL,
+                  t.started_time=NULL,t.finished_time=NULL,t.next_attempt_time=NOW(6),t.update_time=NOW()
+                WHERE t.id=? AND t.user_id=? AND t.status IN ('FAILED','RETRYING') AND t.generation=d.generation
+                  AND ((t.stage='CLEANUP' AND d.parse_status='DELETED') OR
+                    (t.stage<>'CLEANUP' AND d.parse_status<>'DELETED' AND k.status='ACTIVE'))
+                """, taskId, userId);
+        if (changed == 0) throw new BusinessException("任务已失效或正在处理中");
+        pipeline.enqueue(taskId, task.getStage());
+        return TaskResponse.from(parseTaskMapper.selectById(taskId));
     }
 
     private ParseTaskEntity getOwnedTask(Long userId, Long taskId) {

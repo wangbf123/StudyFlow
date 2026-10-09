@@ -64,26 +64,21 @@ public class MockAiClient implements AiClient {
     private AiChatResponse structuredRagAnswer(AiChatRequest request) {
         String prompt = request.userPrompt() == null ? "" : request.userPrompt();
         String question = request.question() == null ? "" : request.question().trim();
-        Set<String> sourceIds = extractSourceIds(prompt);
-        StringBuilder citations = new StringBuilder();
-        int count = 0;
-        for (String sourceId : sourceIds) {
-            if (count >= 2) {
-                break;
-            }
-            if (!citations.isEmpty()) {
-                citations.append(',');
-            }
-            citations.append("{\"source_id\":\"").append(escapeJson(sourceId)).append("\"}");
-            count++;
+        // Deterministic extractive mode: exact text, never pretend mock inference verifies semantics.
+        Matcher blocks = Pattern.compile("Source ID: (S[0-9]+).*?Content:\n(.*?)(?=\n\n\\[S[0-9]+\\]|\n\n\nRetrieval query:|\\z)", Pattern.DOTALL).matcher(prompt);
+        java.util.List<java.util.Map<String, Object>> claims = new java.util.ArrayList<>();
+        while (blocks.find() && claims.size() < 2) {
+            String text = blocks.group(2).strip();
+            int length = Math.min(text.length(), 1200);
+            if (length > 0 && Character.isHighSurrogate(text.charAt(length - 1))) length--;
+            String quote = text.substring(0, length);
+            if (quote.length() >= 8) claims.add(java.util.Map.of("text", quote, "evidence",
+                    java.util.List.of(java.util.Map.of("source_id", blocks.group(1), "quote", quote))));
         }
-        String answer = """
-                This is a mock trusted RAG answer generated without calling a real model.
-                It is returned as structured JSON so StudyFlow can validate citations before saving them.
-                Question: %s
-                """.formatted(question).replaceAll("\\s+", " ").trim();
-        String content = "{\"answer\":\"" + escapeJson(answer) + "\",\"citations\":[" + citations + "]}";
-        return new AiChatResponse(content, "mock-rag", 0, 0);
+        try {
+            return new AiChatResponse(new com.fasterxml.jackson.databind.ObjectMapper()
+                    .writeValueAsString(java.util.Map.of("claims", claims)), "mock-extractive", 0, 0);
+        } catch (Exception ex) { throw new IllegalStateException(ex); }
     }
 
     private AiChatResponse mockAgentDecision(AiChatRequest request) {

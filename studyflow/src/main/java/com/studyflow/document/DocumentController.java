@@ -4,6 +4,7 @@ import cn.dev33.satoken.stp.StpUtil;
 import com.studyflow.common.Result;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -42,4 +43,15 @@ public class DocumentController {
     public Result<List<DocumentChunkResponse>> chunks(@PathVariable Long documentId) {
         return Result.ok(documentService.chunks(StpUtil.getLoginIdAsLong(), documentId));
     }
+    @PostMapping("/documents/{documentId}/rebuild")
+    public Result<DocumentUploadResponse> rebuild(@PathVariable Long documentId) {
+        return Result.ok(documentService.rebuild(StpUtil.getLoginIdAsLong(), documentId));
+    }
+
+    @DeleteMapping("/documents/{documentId}")
+    public Result<Void> delete(@PathVariable Long documentId) {
+        documentService.delete(StpUtil.getLoginIdAsLong(), documentId);
+        return Result.ok(null);
+    }
+
 }

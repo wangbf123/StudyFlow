@@ -38,7 +38,8 @@ const kbForm = reactive({
 })
 
 const searchForm = reactive({
-  keyword: 'Redis'
+  keyword: 'Redis',
+  mode: 'RRF'
 })
 
 const qaForm = reactive({
@@ -179,6 +180,31 @@ async function loadDocuments() {
   documents.value = await api.get(`/api/knowledge-bases/${selectedKbId.value}/documents`)
 }
 
+async function rebuildDocument(row) {
+  try {
+    const result = await api.post(`/api/documents/${row.id}/rebuild`, {})
+    ElMessage.info('文档正在重建，可刷新查看进度')
+    await loadDocuments()
+    await waitTask(result.taskId)
+    await loadDocuments()
+    ElMessage.success('重建完成，旧引用已标记为历史版本')
+  } catch (error) {
+    ElMessage.error(error.message)
+    await loadDocuments()
+  }
+}
+
+async function deleteDocument(row) {
+  try {
+    await api.delete(`/api/documents/${row.id}`)
+    await loadDocuments()
+    searchResults.value = []
+    ElMessage.success('文档已删除')
+  } catch (error) {
+    ElMessage.error(error.message)
+  }
+}
+
 function onFileChange(file) {
   uploadFile.value = file.raw
   uploadProgress.value = 0
@@ -306,7 +332,8 @@ async function searchDocuments() {
         knowledgeBaseId: selectedKbId.value,
         keyword: searchForm.keyword.trim(),
         page: 0,
-        size: 10
+        size: 10,
+        mode: searchForm.mode
       }
     })
   } catch (error) {
@@ -385,6 +412,12 @@ async function loadMessages(sessionId) {
   if (!sessionId) return
   selectedSessionId.value = sessionId
   messages.value = await api.get(`/api/qa/sessions/${sessionId}/messages`)
+}
+
+function evidenceParts(detail) {
+  if (!detail || detail.charStart == null || detail.charEnd == null || detail.evidenceState !== 'CURRENT') return null
+  const content = detail.content || ''
+  return { before: content.slice(0, detail.charStart), quote: content.slice(detail.charStart, detail.charEnd), after: content.slice(detail.charEnd) }
 }
 
 async function openCitation(citationId) {
@@ -608,6 +641,14 @@ function statusType(status) {
                 </template>
               </el-table-column>
               <el-table-column prop="summary" label="摘要" min-width="260" show-overflow-tooltip />
+              <el-table-column label="操作" width="160">
+                <template #default="{ row }">
+                  <el-button size="small" :disabled="['PENDING', 'PROCESSING'].includes(row.parseStatus)" @click="rebuildDocument(row)">重建</el-button>
+                  <el-popconfirm title="删除这份文档及其检索内容？" @confirm="deleteDocument(row)">
+                    <template #reference><el-button size="small" type="danger">删除</el-button></template>
+                  </el-popconfirm>
+                </template>
+              </el-table-column>
             </el-table>
           </section>
         </el-tab-pane>
@@ -615,7 +656,12 @@ function statusType(status) {
         <el-tab-pane label="搜索" name="search">
           <section class="panel">
             <div class="panel-head">
-              <h3>全文检索</h3>
+              <h3>资料检索</h3>
+              <el-select v-model="searchForm.mode" style="width: 160px" aria-label="检索方式">
+                <el-option label="混合检索" value="RRF" />
+                <el-option label="关键词检索" value="BM25" />
+                <el-option label="语义检索" value="VECTOR" />
+              </el-select>
               <el-input v-model="searchForm.keyword" class="search-input" placeholder="关键词">
                 <template #append>
                   <el-button :icon="Search" @click="searchDocuments" />
@@ -683,6 +729,18 @@ function statusType(status) {
                 <article v-for="message in messages" :key="message.id" class="message" :class="message.role.toLowerCase()">
                   <div class="message-role">{{ message.role }}</div>
                   <p>{{ message.content }}</p>
+                  <small v-if="message.verificationMode === 'EXTRACTIVE_ONLY'">原文摘录</small>
+                  <small v-else-if="message.answerStatus === 'SUPPORTED'">结论已核验</small>
+                  <small v-else-if="message.answerStatus === 'VERIFICATION_UNAVAILABLE'">核验服务暂不可用</small>
+                  <small v-else-if="message.answerStatus === 'ABSTAINED'">证据不足</small>
+                  <div v-if="message.claims?.length" class="claim-evidence">
+                    <article v-for="claim in message.claims" :key="claim.claimId">
+                      <p>{{ claim.text }}</p>
+                      <button v-for="evidence in claim.evidence" :key="evidence.citationId" class="citation-chip" @click="openCitation(evidence.citationId)">
+                        [{{ evidence.sourceId }}] {{ evidence.documentName }} · {{ evidence.pageNumber ? `第 ${evidence.pageNumber} 页` : `分片 ${evidence.chunkIndex}` }}
+                      </button>
+                    </article>
+                  </div>
                   <div v-if="message.citations?.length" class="citation-row">
                     <button
                       v-for="citation in message.citations"
@@ -820,7 +878,10 @@ function statusType(status) {
           </span>
           / score {{ Number(citationDetail.score || 0).toFixed(2) }}
         </p>
-        <pre>{{ citationDetail.content }}</pre>
+        <p v-if="citationDetail.evidenceState === 'STALE_VERSION'">文档已更新，以下为回答时保存的证据摘录。</p>
+        <blockquote v-if="citationDetail.quote">{{ citationDetail.quote }}</blockquote>
+        <pre v-if="evidenceParts(citationDetail)"><span>{{ evidenceParts(citationDetail).before }}</span><mark>{{ evidenceParts(citationDetail).quote }}</mark><span>{{ evidenceParts(citationDetail).after }}</span></pre>
+        <pre v-else>{{ citationDetail.content }}</pre>
       </div>
     </el-drawer>
   </main>

@@ -1,0 +1,23 @@
+{
+  "status": "PASS",
+  "checks": [
+    "registration/login/knowledge-base creation",
+    "24 TXT uploads through PARSE/EMBED/INDEX with real CPU BGE and MinIO",
+    "all five Java retrieval modes return owned indexed material",
+    "verified extractive QA, persisted claim evidence and original-text offsets",
+    "SSE publishes answer only after evidence verification",
+    "fixed sample retrieval evaluation through the real Java API",
+    "document rebuild creates a new generation and marks old citations stale",
+    "deleted document cannot expose saved citation text",
+    "cross-user QA history is denied",
+    "deleted knowledge base invalidates QA history access"
+  ],
+  "corpus_documents": 24,
+  "embedding_model": "BAAI/bge-small-zh-v1.5@7999e1d3359715c523056ef9478215996d62a620",
+  "qa_mode": "EXTRACTIVE_ONLY",
+  "mq_mode": "async",
+  "ocr": "not exercised",
+  "independent_semantic_accuracy": "not measured",
+  "capacity_benchmark": "not measured",
+  "rate_limit": "disabled only in isolated fixture instance"
+}

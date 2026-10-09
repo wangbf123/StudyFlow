@@ -13,4 +13,6 @@ public class AiProperties {
     private String model = "mock-rag";
     private int timeoutSeconds = 60;
     private double temperature = 0.2;
+    private int maxOutputChars = 64000;
+    private int maxResponseBytes = 262144;
 }

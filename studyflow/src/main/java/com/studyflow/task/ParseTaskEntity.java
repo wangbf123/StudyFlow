@@ -18,6 +18,13 @@ public class ParseTaskEntity {
     private Long documentId;
     private Long userId;
     private String status;
+    private String stage;
+    private Long generation;
+    private String embeddingModel;
+    private Integer embeddingDimension;
+    private String claimToken;
+    private LocalDateTime leaseUntil;
+    private LocalDateTime nextAttemptTime;
     private Integer retryCount;
     private Integer maxRetryCount;
     private String errorMessage;
