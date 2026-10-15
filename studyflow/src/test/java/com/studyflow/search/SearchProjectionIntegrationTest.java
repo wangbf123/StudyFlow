@@ -76,6 +76,19 @@ class SearchProjectionIntegrationTest {
                 var results = service.searchChunks(1L, 10L, "缓存重建", 0, 5, mode);
                 assertEquals(List.of(111L), results.stream().map(ChunkSearchResult::chunkId).toList(), mode.name());
             }
+            var trace=service.explainSearch(1L,10L,"缓存重建",0,5,SearchProperties.RetrievalMode.RRF);
+            assertEquals(1,trace.hits().size());assertTrue(trace.discardedCandidates()>0);
+            var explained=trace.hits().getFirst();
+            assertEquals(1.0/(60+explained.bm25Rank()),explained.bm25RrfContribution(),1e-12);
+            assertEquals(1.0/(60+explained.vectorRank()),explained.vectorRrfContribution(),1e-12);
+            when(embedding.embed(anyString())).thenThrow(new IllegalStateException("offline"));
+            var degraded=service.explainSearch(1L,10L,"缓存重建",0,5,SearchProperties.RetrievalMode.RRF);
+            assertEquals("BM25",degraded.effectiveMode());assertEquals("EMBEDDING_UNAVAILABLE",degraded.degradationReason());
+            assertFalse(degraded.hits().isEmpty());
+            doReturn(axis()).when(embedding).embed(anyString());
+            valid.setContent("changed database text without republishing the same generation");
+            assertTrue(service.searchChunks(1L,10L,"缓存重建",0,5).isEmpty(),"same-generation content drift is rejected");
+            valid.setContent("缓存重建采用互斥锁，避免热点失效时大量请求回源。");
             current.setParseStatus(DocumentStatus.PENDING);
             assertTrue(service.searchChunks(1L, 10L, "缓存重建", 0, 5).isEmpty(), "rebuild hides incomplete generation");
             current.setParseStatus(DocumentStatus.SUCCESS);

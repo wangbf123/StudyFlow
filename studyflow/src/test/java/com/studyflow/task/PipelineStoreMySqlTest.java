@@ -209,4 +209,66 @@ class PipelineStoreMySqlTest {
         assertEquals(1L,retired.getFirst().documentId());
     }
 
+    @Test void indexReadinessAndDerivedSummaryCreationCommitAtomically() {
+        Long id=create().getId();jdbc.update("UPDATE parse_task SET stage='INDEX' WHERE id=?",id);
+        ParseTaskEntity claimed=store.claim(id);
+        assertTrue(store.checkpoint(claimed,document -> {}));
+        assertEquals("SUCCESS",jdbc.queryForObject("SELECT parse_status FROM document WHERE id=1",String.class));
+        Long summaryId=jdbc.queryForObject("SELECT id FROM parse_task WHERE stage='SUMMARY'",Long.class);
+        assertNotNull(summaryId);
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM pipeline_outbox WHERE task_id=? AND stage='SUMMARY'",Integer.class,summaryId));
+        assertFalse(store.checkpoint(claimed,document -> fail("duplicate completion")));
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM parse_task WHERE stage='SUMMARY'",Integer.class));
+        ParseTaskEntity summary=store.claim(summaryId);
+        assertEquals("SUCCESS",jdbc.queryForObject("SELECT parse_status FROM document WHERE id=1",String.class));
+        store.fail(summary,new IllegalStateException("model unavailable"));
+        assertEquals("RETRYING",jdbc.queryForObject("SELECT summary_status FROM document WHERE id=1",String.class));
+        assertEquals("SUCCESS",jdbc.queryForObject("SELECT parse_status FROM document WHERE id=1",String.class));
+    }
+
+    @Test void expiredSummaryLeaseCannotDemoteReadyDocument() {
+        jdbc.update("UPDATE document SET parse_status='SUCCESS' WHERE id=1");
+        Long id=transactions.execute(status -> store.create(documents.selectById(1L),PipelineStage.SUMMARY)).getId();
+        ParseTaskEntity stale=store.claim(id);
+        jdbc.update("UPDATE parse_task SET retry_count=max_retry_count-1,lease_until=TIMESTAMPADD(SECOND,-1,NOW(6)) WHERE id=?",id);
+        store.recover();
+        assertEquals("FAILED",jdbc.queryForObject("SELECT summary_status FROM document WHERE id=1",String.class));
+        assertEquals("SUCCESS",jdbc.queryForObject("SELECT parse_status FROM document WHERE id=1",String.class));
+        assertFalse(store.checkpoint(stale,document -> fail("expired summary must not publish")));
+    }
+
+    @Test void embeddingBatchPersistsWithoutAdvancingStageAndOldGenerationIsFenced() {
+        Long id=create().getId();ParseTaskEntity claimed=store.claim(id);
+        assertTrue(store.checkpointBatch(claimed,document -> jdbc.update("UPDATE document SET summary='batch' WHERE id=1")));
+        assertEquals("PARSE",tasks.selectById(id).getStage());assertEquals("PROCESSING",tasks.selectById(id).getStatus());
+        jdbc.update("UPDATE document SET generation=2 WHERE id=1");
+        assertFalse(store.checkpointBatch(claimed,document -> fail("old generation batch")));
+        assertEquals("batch",jdbc.queryForObject("SELECT summary FROM document WHERE id=1",String.class));
+    }
+
+    @Test void recoveryBatchIsBoundedAndEventuallyProcessesRemainingExpiredTasks() {
+        for(int i=0;i<23;i++) {
+            Long id=create().getId();
+            jdbc.update("UPDATE parse_task SET status='PROCESSING',lease_until=TIMESTAMPADD(SECOND,-1,NOW(6)) WHERE id=?",id);
+        }
+        store.recover();
+        assertEquals(20,jdbc.queryForObject("SELECT COUNT(*) FROM parse_task WHERE status='RETRYING'",Integer.class));
+        store.recover();
+        assertEquals(23,jdbc.queryForObject("SELECT COUNT(*) FROM parse_task WHERE status='RETRYING'",Integer.class));
+    }
+
+    @Test void pendingAgeUsesDatabaseEligibilityInsteadOfJvmCreationTimestamp() {
+        Long id=create().getId();
+        jdbc.update("UPDATE parse_task SET create_time=TIMESTAMPADD(HOUR,-8,NOW()),next_attempt_time=TIMESTAMPADD(SECOND,-5,NOW()) WHERE id=?",id);
+        var registry=new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        var monitor=new com.studyflow.observability.PipelineMonitor(jdbc,registry);
+        monitor.refresh();
+        double age=registry.get("studyflow.pipeline.oldest.pending.seconds").gauge().value();
+        assertTrue(age>=5 && age<30,"age must measure time eligible for execution, not old JVM wall-clock fields: "+age);
+        jdbc.update("UPDATE parse_task SET next_attempt_time=TIMESTAMPADD(HOUR,1,NOW()) WHERE id=?",id);
+        monitor.refresh();
+        assertEquals(0,registry.get("studyflow.pipeline.oldest.pending.seconds").gauge().value());
+        registry.close();
+    }
+
 }

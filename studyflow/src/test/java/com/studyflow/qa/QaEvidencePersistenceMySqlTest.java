@@ -153,6 +153,43 @@ class QaEvidencePersistenceMySqlTest {
     }
 
     @Test
+    void workspaceAggregatesOnlyOwnedCurrentGenerationAndSavedEvidence() throws Exception {
+        persist(qa,answer());
+        var workspace=new com.studyflow.workspace.WorkspaceService(
+                new KnowledgeBaseService(sql.getMapper(KnowledgeBaseMapper.class)),jdbc,sql.getMapper(DocumentMapper.class));
+        var snapshot=workspace.overview(1L,1L);
+        assertEquals(1,snapshot.documentCount());assertEquals(1,snapshot.readyCount());
+        assertEquals(1,snapshot.chunkCount());assertEquals(1,snapshot.evidenceCount());
+        assertThrows(BusinessException.class,()->workspace.overview(2L,1L));
+        jdbc.update("UPDATE document SET generation=2 WHERE id=20");
+        assertEquals(0,workspace.overview(1L,1L).chunkCount());
+        assertEquals(0,workspace.overview(1L,1L).evidenceCount());
+        jdbc.update("UPDATE knowledge_base SET status='DELETED' WHERE id=1");
+        assertThrows(BusinessException.class,()->workspace.overview(1L,1L));
+    }
+
+    @Test
+    void documentCursorPaginationAndFiltersCannotExposeForeignOrDeletedDocuments() {
+        jdbc.update("""
+                INSERT INTO document(id,user_id,knowledge_base_id,original_file_name,file_type,file_size,file_md5,bucket,object_key,parse_status,generation,create_time,update_time)
+                SELECT id+1,user_id,knowledge_base_id,'redis.txt',file_type,file_size,file_md5,bucket,object_key,'FAILED',generation,create_time,update_time FROM document WHERE id=20
+                """);
+        jdbc.update("""
+                INSERT INTO document(id,user_id,knowledge_base_id,original_file_name,file_type,file_size,file_md5,bucket,object_key,parse_status,generation,create_time,update_time)
+                SELECT id+1,user_id,knowledge_base_id,'deleted.txt',file_type,file_size,file_md5,bucket,object_key,'DELETED',generation,create_time,update_time FROM document WHERE id=21
+                """);
+        var workspace=new com.studyflow.workspace.WorkspaceService(
+                new KnowledgeBaseService(sql.getMapper(KnowledgeBaseMapper.class)),jdbc,sql.getMapper(DocumentMapper.class));
+        var first=workspace.documents(1L,1L,null,1,null,null);
+        assertTrue(first.hasMore());assertEquals(21L,first.items().getFirst().id());
+        var second=workspace.documents(1L,1L,first.nextCursor(),1,null,null);
+        assertFalse(second.hasMore());assertEquals(20L,second.items().getFirst().id());
+        assertEquals(1,workspace.documents(1L,1L,null,20,"redis","FAILED").items().size());
+        assertThrows(BusinessException.class,()->workspace.documents(2L,1L,null,20,null,null));
+        assertThrows(BusinessException.class,()->workspace.documents(1L,1L,null,20,null,"DELETED"));
+    }
+
+    @Test
     void failedEvidenceInsertRollsBackMessageAndClaims() {
         QaCitationMapper failing = mock(QaCitationMapper.class, delegatesTo(citations));
         doThrow(new IllegalStateException("injected citation write failure")).when(failing).insert(any(QaCitationEntity.class));

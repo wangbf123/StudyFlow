@@ -15,7 +15,11 @@ public record DocumentResponse(
         Integer ocrPageCount,
         Long ocrElapsedMs,
         String summary,
-        LocalDateTime createTime
+        LocalDateTime createTime,
+        Long generation,
+        String summaryStatus,
+        Integer summaryInputChars,
+        Boolean summaryTruncated
 ) {
     public static DocumentResponse from(DocumentEntity entity) {
         return new DocumentResponse(
@@ -31,7 +35,11 @@ public record DocumentResponse(
                 entity.getOcrPageCount(),
                 entity.getOcrElapsedMs(),
                 entity.getSummary(),
-                entity.getCreateTime()
+                entity.getCreateTime(),
+                entity.getGeneration(),
+                entity.getSummaryStatus(),
+                entity.getSummaryInputChars(),
+                entity.getSummaryTruncated()
         );
     }
 }

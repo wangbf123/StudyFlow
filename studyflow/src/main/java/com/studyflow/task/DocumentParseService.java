@@ -55,6 +55,7 @@ public class DocumentParseService {
                 case PARSE -> parseStage(task, document, heartbeat);
                 case EMBED -> embedStage(task, document, heartbeat);
                 case INDEX -> indexStage(task, document, heartbeat);
+                case SUMMARY -> summaryStage(task, document, heartbeat);
                 case CLEANUP -> cleanupStage(task, document, heartbeat);
             }
         } catch (Exception ex) {
@@ -70,8 +71,6 @@ public class DocumentParseService {
         ParsedDocument result = parser.parseDocument(document.getOriginalFileName(), document.getFileType(), bytes);
         List<TextChunker.ParsedChunk> parsed = chunker.chunkDocument(result);
         if (parsed.isEmpty()) throw new IllegalStateException("未解析到有效文本分片");
-        AiResult summary = ai.summarize(document.getOriginalFileName(),
-                String.join("\n", parsed.stream().map(TextChunker.ParsedChunk::content).toList()));
         heartbeat.assertOwned();
         store.checkpoint(task, current -> {
             chunks.delete(Wrappers.<DocumentChunkEntity>lambdaQuery()
@@ -96,50 +95,118 @@ public class DocumentParseService {
             current.setPageCount(result.pageCount());
             current.setOcrPageCount(result.ocrPageCount());
             current.setOcrElapsedMs(result.ocrElapsedMs());
-            current.setSummary(summary.summary());
             documents.updateById(current);
-            saveSummary(current, summary);
         });
     }
 
     private void embedStage(ParseTaskEntity task, DocumentEntity document, Heartbeat heartbeat) {
         assertEmbeddingVersion(task);
-        List<DocumentChunkEntity> items = stageChunks(task);
-        if (items.isEmpty()) throw new IllegalStateException("PARSE检查点分片不存在");
-        List<List<Double>> vectors = embeddingProperties.isEnabled()
-                ? embeddings.embedBatch(items.stream().map(DocumentChunkEntity::getContent).toList()) : List.of();
-        if (embeddingProperties.isEnabled() && vectors.size() != items.size()) throw new IllegalStateException("Embedding count mismatch");
-        for (List<Double> vector : vectors) {
-            if (vector == null || vector.size() != embeddingProperties.getDimension()
-                    || vector.stream().anyMatch(v -> v == null || !Double.isFinite(v))) {
-                throw new IllegalStateException("Embedding dimension or finite-value validation failed");
+        int cursor = -1;
+        boolean found = false;
+        while (true) {
+            List<DocumentChunkEntity> page = chunkPage(task, cursor);
+            if (page.isEmpty()) break;
+            found = true;
+            List<DocumentChunkEntity> missing = page.stream().filter(item -> !hasCurrentVector(item)).toList();
+            if (embeddingProperties.isEnabled() && !missing.isEmpty()) {
+                List<List<Double>> vectors = embeddings.embedBatch(missing.stream().map(DocumentChunkEntity::getContent).toList());
+                if (vectors.size() != missing.size()) throw new IllegalStateException("Embedding count mismatch");
+                for (List<Double> vector : vectors) validateVector(vector);
+                heartbeat.assertOwned();
+                boolean saved = store.checkpointBatch(task, current -> {
+                    for (int i = 0; i < missing.size(); i++) {
+                        DocumentChunkEntity item = missing.get(i);
+                        item.setEmbedding(codec.encode(vectors.get(i)));
+                        item.setEmbeddingModel(embeddings.model());
+                        item.setEmbeddingDim(vectors.get(i).size());
+                        chunks.updateById(item);
+                    }
+                });
+                if (!saved) throw new IllegalStateException("Worker lease lost before embedding batch checkpoint");
             }
+            cursor = page.getLast().getChunkIndex() == null ? 0 : page.getLast().getChunkIndex();
+            if (page.size() < properties.chunkBatchSize()) break;
         }
+        if (!found) throw new IllegalStateException("PARSE检查点分片不存在");
         heartbeat.assertOwned();
-        store.checkpoint(task, current -> {
-            for (int i = 0; i < items.size(); i++) {
-                DocumentChunkEntity item = items.get(i);
-                if (!vectors.isEmpty()) {
-                    item.setEmbedding(codec.encode(vectors.get(i)));
-                    item.setEmbeddingModel(embeddings.model());
-                    item.setEmbeddingDim(vectors.get(i).size());
-                }
-                chunks.updateById(item);
-            }
-        });
+        store.checkpoint(task, current -> {});
+    }
+
+    private boolean hasCurrentVector(DocumentChunkEntity chunk) {
+        if (!java.util.Objects.equals(embeddings.model(), chunk.getEmbeddingModel())
+                || !Integer.valueOf(embeddingProperties.getDimension()).equals(chunk.getEmbeddingDim())) return false;
+        try { validateVector(codec.decode(chunk.getEmbedding())); return true; }
+        catch (RuntimeException invalid) { return false; }
+    }
+
+    private void validateVector(List<Double> vector) {
+        if (vector == null || vector.size() != embeddingProperties.getDimension()
+                || vector.stream().anyMatch(v -> v == null || !Double.isFinite(v))
+                || vector.stream().allMatch(v -> v == 0.0)) {
+            throw new IllegalStateException("Embedding must be finite, nonzero and match configured dimension");
+        }
     }
 
     private void indexStage(ParseTaskEntity task, DocumentEntity document, Heartbeat heartbeat) {
         assertEmbeddingVersion(task);
-        List<DocumentChunkEntity> items = stageChunks(task);
-        if (items.isEmpty()) throw new IllegalStateException("EMBED检查点分片不存在");
-        search.indexChunks(document, items);
+        int cursor = -1;
+        boolean found = false;
+        while (true) {
+            List<DocumentChunkEntity> page = chunkPage(task, cursor);
+            if (page.isEmpty()) break;
+            found = true;
+            heartbeat.assertOwned();
+            search.indexChunks(document, page);
+            cursor = page.getLast().getChunkIndex() == null ? 0 : page.getLast().getChunkIndex();
+            if (page.size() < properties.chunkBatchSize()) break;
+        }
+        if (!found) throw new IllegalStateException("EMBED检查点分片不存在");
         heartbeat.assertOwned();
         boolean published = store.checkpoint(task, current -> {});
-        // A replacement worker may already have published this SAME generation. Never delete
-        // current-generation indexes merely because this token lost its lease. The durable
-        // retired-generation reconciler handles rebuild/deletion, including very late writes.
+        // Only retired-generation reconciliation may delete a late worker's projection.
         if (!published) log.info("Discard stale index publication: task={},generation={}", task.getId(), task.getGeneration());
+    }
+
+    private void summaryStage(ParseTaskEntity task, DocumentEntity document, Heartbeat heartbeat) {
+        StringBuilder context = new StringBuilder();
+        int cursor = -1;
+        int limit = properties.summaryMaxChars();
+        while (context.length() <= limit) {
+            List<DocumentChunkEntity> page = chunkPage(task, cursor);
+            if (page.isEmpty()) break;
+            for (DocumentChunkEntity chunk : page) {
+                if (!context.isEmpty()) context.append('\n');
+                String content = chunk.getContent();
+                context.append(content, 0, Math.min(content.length(), limit + 1 - context.length()));
+                if (context.length() > limit) break;
+            }
+            cursor = page.getLast().getChunkIndex() == null ? 0 : page.getLast().getChunkIndex();
+            if (page.size() < properties.chunkBatchSize()) break;
+        }
+        if (context.isEmpty()) throw new IllegalStateException("Summary requires parsed chunks");
+        boolean truncated = context.length() > limit;
+        String input = context.substring(0, Math.min(limit, context.length()));
+        AiResult summary = ai.summarize(document.getOriginalFileName(), input);
+        if (summary == null || summary.summary() == null || summary.summary().isBlank()) {
+            throw new IllegalStateException("Summary provider returned no summary");
+        }
+        heartbeat.assertOwned();
+        store.checkpoint(task, current -> {
+            current.setSummary(summary.summary());
+            current.setSummaryInputChars(input.length());
+            current.setSummaryTruncated(truncated);
+            documents.updateById(current);
+            saveSummary(current, summary);
+        });
+    }
+
+    private List<DocumentChunkEntity> chunkPage(ParseTaskEntity task, int afterIndex) {
+        return chunks.selectList(Wrappers.<DocumentChunkEntity>lambdaQuery()
+                .eq(DocumentChunkEntity::getDocumentId, task.getDocumentId())
+                .eq(DocumentChunkEntity::getGeneration, task.getGeneration())
+                .gt(DocumentChunkEntity::getChunkIndex, afterIndex)
+                .orderByAsc(DocumentChunkEntity::getChunkIndex)
+                .last("LIMIT " + properties.chunkBatchSize()));
     }
 
     private void cleanupStage(ParseTaskEntity task, DocumentEntity document, Heartbeat heartbeat) {
@@ -157,13 +224,6 @@ public class DocumentParseService {
                 || (task.getEmbeddingDimension() != null && task.getEmbeddingDimension() != embeddingProperties.getDimension())) {
             throw new IllegalStateException("Embedding configuration changed; rebuild document to create a new generation");
         }
-    }
-
-    private List<DocumentChunkEntity> stageChunks(ParseTaskEntity task) {
-        return chunks.selectList(Wrappers.<DocumentChunkEntity>lambdaQuery()
-                .eq(DocumentChunkEntity::getDocumentId, task.getDocumentId())
-                .eq(DocumentChunkEntity::getGeneration, task.getGeneration())
-                .orderByAsc(DocumentChunkEntity::getChunkIndex));
     }
 
     private void saveSummary(DocumentEntity document, AiResult result) {

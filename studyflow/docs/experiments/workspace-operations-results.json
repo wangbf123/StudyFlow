@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "listener": "127.0.0.1:9092 (isolated test instance)",
+  "checks": {
+    "health/liveness": "UP",
+    "health/readiness": "UP",
+    "cached_pipeline_metrics": "PASS",
+    "snapshot_available": 1
+  },
+  "scope": "Readiness covers application/db/redis/elasticsearch; does not cover BGE/OCR/MinIO/model providers."
+}

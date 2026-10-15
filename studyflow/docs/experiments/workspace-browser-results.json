@@ -1,0 +1,13 @@
+{
+  "status": "PASS",
+  "browser": "Chromium headless",
+  "checks": [
+    "real authenticated knowledge overview",
+    "hybrid retrieval with ranking detail",
+    "claim citation original-text highlight",
+    "document filename filter",
+    "390px mobile layout without horizontal overflow"
+  ],
+  "page_errors": [],
+  "screenshot_data": "24 real sample documents, real BGE/ES/MinIO, extractive mock AI"
+}

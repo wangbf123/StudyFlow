@@ -19,6 +19,15 @@ public class SearchController {
     private final SearchService searchService;
     private final KnowledgeBaseService knowledgeBaseService;
 
+    @GetMapping("/explain")
+    public Result<SearchExplanation> explain(@RequestParam Long knowledgeBaseId,@RequestParam String keyword,
+            @RequestParam(defaultValue="0") int page,@RequestParam(defaultValue="10") int size,
+            @RequestParam(required=false) SearchProperties.RetrievalMode mode) {
+        Long userId=StpUtil.getLoginIdAsLong();
+        knowledgeBaseService.getOwnedActive(userId,knowledgeBaseId);
+        return Result.ok(searchService.explainSearch(userId,knowledgeBaseId,keyword,page,size,mode));
+    }
+
     @GetMapping
     public Result<List<SearchResponse>> search(
             @RequestParam Long knowledgeBaseId,

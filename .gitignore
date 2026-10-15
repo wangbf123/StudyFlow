@@ -31,3 +31,6 @@ application-dev.yml
 studyflow/*.jtl
 studyflow/load-test/
 studyflow/test-rocketmq.txt
+
+# Temporary browser verification credentials
+**/browser-session.json

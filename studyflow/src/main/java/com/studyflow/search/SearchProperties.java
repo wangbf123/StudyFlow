@@ -13,6 +13,9 @@ public class SearchProperties {
     private int knnCandidates = 200;
     private int maxCandidates = 200;
 
+    public int rrfConstant() { return Math.max(1, rrfConstant); }
+    public int maxCandidates() { return Math.min(1000, Math.max(10, maxCandidates)); }
+
     public enum RetrievalMode {
         BM25, VECTOR, RRF, RRF_LEXICAL, LEGACY
     }

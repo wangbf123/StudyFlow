@@ -50,3 +50,10 @@ python3 retrieval-lab/evaluate.py --backend-url http://127.0.0.1:8082 \
 实测报告见 `reports/initial-native-evaluation.md` 和 `reports/initial-java-evaluation.md`。当前样例包含 24 份笔记、22 道 test 问题，问题与标签由实现者编写，尚未经独立标注；顺序测量的延迟不是负载测试。可以写“实现并评测混合检索”，不能据此声称生产准确率或高并发容量。
 
 完整 API 验证可在独立测试实例执行 `python3 retrieval-lab/verify_backend.py --backend-url http://127.0.0.1:8082`。实例使用 async MQ、extractive mock AI、OCR 关闭及上述真实 BGE；仅该测试实例关闭限流，以连续写入语料。脚本创建自己的测试账号和知识库，运行上传、检索、问答、SSE、重建、删除与跨用户验证，成功后删除自己的知识库。账号创建仍保留在测试库，测试结束可销毁整个隔离库。报告不记录密码或 token。
+
+
+## 知识库工作台验收
+
+`verify_workspace.py` 覆盖 24 份真实入库、独立摘要、当前版本聚合、游标分页、检索说明、引用以及新端点权限；可用两个实例验证 Redis 共享 token。最新报告为 `reports/workspace-java-evaluation.md`，旧 initial 报告保留原始日期。
+
+工作台、共享会话与截图复现条件见 [升级验收](../studyflow/docs/workspace-upgrade-verification.md)。`capture_workspace.py` 使用实际浏览器和公开样例，不注入伪造数据；需要可选的 Playwright 依赖与浏览器。

@@ -9,6 +9,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+@lombok.extern.slf4j.Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -32,8 +33,14 @@ public class GlobalExceptionHandler {
         return Result.fail(400, "参数校验失败：" + ex.getMessage());
     }
 
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Result<Void>> handleArgumentException(IllegalArgumentException ex) {
+        return ResponseEntity.badRequest().body(Result.fail(400,"请求参数不合法"));
+    }
+
     @ExceptionHandler(Exception.class)
-    public Result<Void> handleException(Exception ex) {
-        return Result.fail(500, "系统异常：" + ex.getMessage());
+    public ResponseEntity<Result<Void>> handleException(Exception ex) {
+        log.error("Unhandled server failure, requestId={}",org.slf4j.MDC.get("requestId"),ex);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Result.fail(500,"系统暂时不可用，请稍后重试"));
     }
 }

@@ -133,18 +133,32 @@ public class SearchService {
     /** Per-request mode isolates ablation runs; it never changes global application configuration. */
     public List<ChunkSearchResult> searchChunks(Long userId, Long knowledgeBaseId, String keyword,
                                                int page, int size, RetrievalMode mode) {
+        return executeSearch(userId,knowledgeBaseId,keyword,page,size,mode).results();
+    }
+
+    public SearchExplanation explainSearch(Long userId, Long knowledgeBaseId, String keyword, int page, int size, RetrievalMode mode) {
+        return executeSearch(userId,knowledgeBaseId,keyword,page,size,mode).explanation();
+    }
+
+    private record SearchExecution(List<ChunkSearchResult> results, SearchExplanation explanation) {}
+
+    private SearchExecution executeSearch(Long userId, Long knowledgeBaseId, String keyword, int page, int size, RetrievalMode mode) {
+        long started = System.nanoTime();
+        if (mode == null) mode = ragProperties.isHybridEnabled() ? searchProperties.getMode() : RetrievalMode.BM25;
+        String degradation = null;
         String queryText = keyword == null ? "" : keyword.trim();
-        if (queryText.isBlank()) return List.of();
+        if (queryText.length()>2000) throw new com.studyflow.common.BusinessException(400,"检索问题最多 2000 字符");
+        if (queryText.isBlank()) return emptyExecution(mode,started);
         if (mode == null) mode = searchProperties.getMode();
         var kb = knowledgeBaseMapper.selectById(knowledgeBaseId);
         if (kb == null || !Objects.equals(kb.getUserId(), userId) || !"ACTIVE".equals(kb.getStatus())) {
-            return List.of();
+            return emptyExecution(mode,started);
         }
         int safePage = Math.max(page, 0);
         int safeSize = Math.min(Math.max(size, 1), 50);
         // Candidate retrieval is deliberately bounded; deep pagination cannot silently overflow.
         long offset = (long) safePage * safeSize;
-        if (offset >= searchProperties.getMaxCandidates()) {
+        if (offset >= searchProperties.maxCandidates()) {
             throw new IllegalArgumentException("Search pagination exceeds the bounded candidate window");
         }
         int from = (int) offset;
@@ -160,6 +174,7 @@ public class SearchService {
         }
         if (mode != RetrievalMode.BM25) {
             List<Double> vector = queryVector(queryText);
+            if (vector.isEmpty()) degradation = "EMBEDDING_UNAVAILABLE";
             if (vector.isEmpty() && mode == RetrievalMode.VECTOR) {
                 throw new IllegalStateException("Vector-only retrieval requires a working embedding provider");
             }
@@ -180,19 +195,39 @@ public class SearchService {
             }
         }
         // Elasticsearch is a projection. Database ownership, state and generation remain authoritative.
+        int beforeVerification = candidates.size();
+        int lexicalCount = lexical.size();
+        int vectorCount = semantic.size();
         keepCurrentCandidates(candidates, userId, knowledgeBaseId);
-        lexical.removeIf(id -> !candidates.containsKey(id));
-        semantic.removeIf(id -> !candidates.containsKey(id));
+        // Preserve original list ranks: filtering another hit must not inflate a survivor.
         Map<Long, Double> fused = ReciprocalRankFusion.scores(lexical, semantic,
-                Math.max(searchProperties.getRrfConstant(), 1));
+                Math.max(searchProperties.rrfConstant(), 1));
         double maxBm25 = candidates.values().stream().map(c -> c.bm25Raw).filter(Objects::nonNull)
                 .mapToDouble(Double::doubleValue).max().orElse(0.0);
         RetrievalMode selectedMode = mode;
-        return candidates.values().stream()
+        List<ChunkSearchResult> results = candidates.values().stream()
                 .map(candidate -> toResult(candidate, queryText, maxBm25, selectedMode, fused))
                 .sorted(Comparator.<ChunkSearchResult>comparingDouble(result -> nullToZero(result.score()))
                         .reversed().thenComparing(result -> nullToZero(result.chunkId())))
                 .skip(from).limit(safeSize).toList();
+        String effective = degradation == null ? mode.name() : "BM25";
+        SearchExplanation explanation = new SearchExplanation(mode.name(),effective,embeddingProperties.getProvider(),
+                embeddingClient.model(),degradation,lexicalCount,vectorCount,beforeVerification-candidates.size(),candidates.size(),
+                searchProperties.rrfConstant(),Math.round((System.nanoTime()-started)/10000.0)/100.0,
+                results.stream().map(hit -> new SearchExplanation.ExplainedHit(SearchResponse.from(hit),rank(lexical,hit.chunkId()),
+                        rank(semantic,hit.chunkId()),contribution(lexical,hit.chunkId()),contribution(semantic,hit.chunkId()))).toList());
+        return new SearchExecution(results,explanation);
+    }
+
+    private SearchExecution emptyExecution(RetrievalMode mode, long started) {
+        return new SearchExecution(List.of(),new SearchExplanation(mode.name(),mode.name(),embeddingProperties.getProvider(),
+                embeddingClient.model(),null,0,0,0,0,searchProperties.rrfConstant(),(System.nanoTime()-started)/1000000.0,List.of()));
+    }
+
+    private Integer rank(List<Long> ids, Long id) { int position=ids.indexOf(id); return position<0 ? null : position+1; }
+    private double contribution(List<Long> ids, Long id) {
+        Integer position=rank(ids,id);
+        return position==null ? 0.0 : 1.0/(searchProperties.rrfConstant()+position);
     }
 
     private List<Hit<DocumentChunkIndex>> fetchVectorHits(Long userId, Long knowledgeBaseId,
@@ -204,7 +239,7 @@ public class SearchService {
             indexManager.ensureIndex();
             var response = elasticsearchClient.search(r -> r.index(searchProperties.getIndex()).size(size)
                     .knn(k -> k.field("embedding").queryVector(vector.stream().map(Double::floatValue).toList())
-                            .k((long) size).numCandidates((long) Math.max(size, searchProperties.getKnnCandidates()))
+                            .k((long) size).numCandidates((long) Math.min(10000, Math.max(size, searchProperties.getKnnCandidates())))
                             .filter(f -> f.bool(b -> b
                                     .filter(t -> t.term(x -> x.field("userId").value(userId)))
                                     .filter(t -> t.term(x -> x.field("knowledgeBaseId").value(knowledgeBaseId)))
@@ -233,6 +268,7 @@ public class SearchService {
                     || !Objects.equals(chunk.getKnowledgeBaseId(), knowledgeBaseId)
                     || !Objects.equals(document.getKnowledgeBaseId(), knowledgeBaseId)
                     || !Objects.equals(chunk.getDocumentId(), document.getId())
+                    || !Objects.equals(indexed.content, chunk.getContent())
                     || !DocumentStatus.SUCCESS.equals(document.getParseStatus())
                     || !Objects.equals(generation(chunk.getGeneration()), generation(document.getGeneration()))
                     || !Objects.equals(generation(indexed.generation), generation(document.getGeneration()));
@@ -244,7 +280,7 @@ public class SearchService {
     private int candidateSize(int from, int safeSize) {
         int configured = Math.max(ragProperties.getBm25CandidateSize(), 10);
         int requested = from + safeSize * 5;
-        return Math.min(Math.max(configured, requested), Math.max(searchProperties.getMaxCandidates(), 10));
+        return Math.min(Math.max(configured, requested), Math.max(searchProperties.maxCandidates(), 10));
     }
 
     private List<Hit<DocumentChunkIndex>> fetchBm25Hits(
@@ -398,7 +434,7 @@ public class SearchService {
             case LEGACY -> combine(bm25Score, vectorScore, rerankScore, candidate.bm25Raw != null);
             case RRF -> rrf;
             // Normalize RRF by its theoretical two-list maximum before adding the lexical baseline.
-            case RRF_LEXICAL -> 0.9 * rrf * (searchProperties.getRrfConstant() + 1) / 2.0 + 0.1 * rerankScore;
+            case RRF_LEXICAL -> 0.9 * rrf * (searchProperties.rrfConstant() + 1) / 2.0 + 0.1 * rerankScore;
         };
         return new ChunkSearchResult(
                 candidate.chunkId,
@@ -477,7 +513,10 @@ public class SearchService {
         }
         try {
             List<Double> vector = embeddingClient.embed(text);
-            return vector == null ? List.of() : vector;
+            if (vector == null || vector.size()!=ChunkIndexManager.DIMENSION
+                    || vector.stream().anyMatch(v -> v==null || !Double.isFinite(v))
+                    || vector.stream().allMatch(v -> v==0.0)) return List.of();
+            return vector;
         } catch (Exception ex) {
             log.warn("Create query embedding failed, fallback to BM25 only: {}", ex.getMessage());
             return List.of();

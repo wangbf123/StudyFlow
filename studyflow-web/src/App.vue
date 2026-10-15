@@ -1,5 +1,7 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import KnowledgeOverview from './components/KnowledgeOverview.vue'
+import SearchWorkbench from './components/SearchWorkbench.vue'
 import { ElMessage } from 'element-plus'
 import {
   Bot,
@@ -27,9 +29,9 @@ const uploadProgress = ref(0)
 const uploadStatus = ref('')
 
 const authForm = reactive({
-  username: 'test001',
-  password: '123456',
-  nickname: '测试用户'
+  username: '',
+  password: '',
+  nickname: ''
 })
 
 const kbForm = reactive({
@@ -37,13 +39,8 @@ const kbForm = reactive({
   description: ''
 })
 
-const searchForm = reactive({
-  keyword: 'Redis',
-  mode: 'RRF'
-})
-
 const qaForm = reactive({
-  question: 'Redis 为什么快？StudyFlow 里 Redis 用来做什么？'
+  question: ''
 })
 
 const agentForm = reactive({
@@ -53,13 +50,20 @@ const agentForm = reactive({
 const knowledgeBases = ref([])
 const selectedKbId = ref(null)
 const documents = ref([])
-const searchResults = ref([])
+const overviewEpoch = ref(0)
+const documentCursor = ref(null)
+const documentHasMore = ref(false)
+const documentFilter = reactive({ keyword: '', status: '' })
+let streamController
+let agentController
+let messageEpoch = 0
+onBeforeUnmount(() => { streamController?.abort(); agentController?.abort() })
 const retrieveResult = ref(null)
 const qaSessions = ref([])
 const selectedSessionId = ref(null)
 const messages = ref([])
 const uploadFile = ref(null)
-const activeTab = ref('documents')
+const activeTab = ref('overview')
 const streamAnswer = ref('')
 const streamMeta = ref(null)
 const citationDrawerVisible = ref(false)
@@ -122,6 +126,8 @@ async function submitAuth() {
 }
 
 async function logout() {
+  streamController?.abort()
+  agentController?.abort()
   try {
     await api.post('/api/auth/logout')
   } catch {
@@ -129,13 +135,19 @@ async function logout() {
     clearToken()
     authenticated.value = false
     currentUser.value = null
+    selectedKbId.value = null
+    selectedSessionId.value = null
+    knowledgeBases.value = []
+    documents.value = []
+    messages.value = []
+    agentRuns.value = []
   }
 }
 
 async function loadKnowledgeBases() {
   knowledgeBases.value = await api.get('/api/knowledge-bases')
-  if (!selectedKbId.value && knowledgeBases.value.length) {
-    selectedKbId.value = knowledgeBases.value[0].id
+  if (!knowledgeBases.value.some(kb => kb.id === selectedKbId.value)) {
+    selectedKbId.value = knowledgeBases.value[0]?.id || null
   }
   if (selectedKbId.value) {
     await Promise.all([loadDocuments(), loadSessions(), loadAgentSessions()])
@@ -164,7 +176,11 @@ async function createKnowledgeBase() {
 
 async function selectKnowledgeBase(id) {
   selectedKbId.value = id
-  searchResults.value = []
+  documentFilter.keyword = ''
+  documentFilter.status = ''
+  streamController?.abort()
+  agentController?.abort()
+  messageEpoch++
   retrieveResult.value = null
   messages.value = []
   selectedSessionId.value = null
@@ -175,9 +191,19 @@ async function selectKnowledgeBase(id) {
   await Promise.all([loadDocuments(), loadSessions(), loadAgentSessions()])
 }
 
-async function loadDocuments() {
-  if (!selectedKbId.value) return
-  documents.value = await api.get(`/api/knowledge-bases/${selectedKbId.value}/documents`)
+async function loadDocuments(append = false) {
+  append = append === true
+  const kb = selectedKbId.value
+  if (!kb) return
+  const result = await api.get(`/api/knowledge-bases/${kb}/document-page`, { params: {
+    beforeId: append ? documentCursor.value : undefined, size: 20,
+    keyword: documentFilter.keyword || undefined, status: documentFilter.status || undefined
+  } })
+  if (selectedKbId.value !== kb) return
+  documents.value = append ? [...new Map([...documents.value, ...result.items].map(doc => [doc.id, doc])).values()] : result.items
+  documentCursor.value = result.nextCursor
+  documentHasMore.value = result.hasMore
+  overviewEpoch.value++
 }
 
 async function rebuildDocument(row) {
@@ -198,7 +224,7 @@ async function deleteDocument(row) {
   try {
     await api.delete(`/api/documents/${row.id}`)
     await loadDocuments()
-    searchResults.value = []
+    streamController?.abort()
     ElMessage.success('文档已删除')
   } catch (error) {
     ElMessage.error(error.message)
@@ -324,23 +350,6 @@ async function waitTask(taskId) {
   throw new Error('解析超时')
 }
 
-async function searchDocuments() {
-  if (!canUseKb.value || !searchForm.keyword.trim()) return
-  try {
-    searchResults.value = await api.get('/api/search', {
-      params: {
-        knowledgeBaseId: selectedKbId.value,
-        keyword: searchForm.keyword.trim(),
-        page: 0,
-        size: 10,
-        mode: searchForm.mode
-      }
-    })
-  } catch (error) {
-    ElMessage.error(error.message)
-  }
-}
-
 async function retrieveChunks() {
   if (!canUseKb.value || !qaForm.question.trim()) return
   try {
@@ -375,6 +384,8 @@ async function askStream() {
   if (!canUseKb.value || !qaForm.question.trim()) return
   try {
     streamLoading.value = true
+    streamController?.abort()
+    streamController = new AbortController()
     streamAnswer.value = ''
     streamMeta.value = null
     await streamAsk(
@@ -391,27 +402,30 @@ async function askStream() {
         if (event.event === 'delta') {
           streamAnswer.value += event.data.data || ''
         }
-      }
+      },
+      { signal: streamController.signal }
     )
     await Promise.all([loadSessions(), loadMessages(selectedSessionId.value)])
   } catch (error) {
-    ElMessage.error(error.message)
+    if (error.name !== 'AbortError') ElMessage.error(error.message)
   } finally {
     streamLoading.value = false
   }
 }
 
 async function loadSessions() {
-  if (!selectedKbId.value) return
-  qaSessions.value = await api.get('/api/qa/sessions', {
-    params: { knowledgeBaseId: selectedKbId.value }
-  })
+  const kb = selectedKbId.value
+  if (!kb) return
+  const rows = await api.get('/api/qa/sessions', { params: { knowledgeBaseId: kb } })
+  if (selectedKbId.value === kb) qaSessions.value = rows
 }
 
 async function loadMessages(sessionId) {
   if (!sessionId) return
+  const epoch = ++messageEpoch, kb = selectedKbId.value
   selectedSessionId.value = sessionId
-  messages.value = await api.get(`/api/qa/sessions/${sessionId}/messages`)
+  const rows = await api.get(`/api/qa/sessions/${sessionId}/messages`)
+  if (epoch === messageEpoch && kb === selectedKbId.value) messages.value = rows
 }
 
 function evidenceParts(detail) {
@@ -456,7 +470,10 @@ function selectAgentRun(run) {
 
 async function runAgent() {
   if (!canUseKb.value || !agentForm.goal.trim()) return
+  const kb = selectedKbId.value
   try {
+    agentController?.abort()
+    agentController = new AbortController()
     agentLoading.value = true
     selectedAgentRun.value = null
     agentSteps.value = []
@@ -467,6 +484,7 @@ async function runAgent() {
         goal: agentForm.goal.trim()
       },
       (event) => {
+        if (kb !== selectedKbId.value) return
         if (event.event === 'run_start') {
           selectedAgentSessionId.value = event.data.sessionId
         }
@@ -480,11 +498,13 @@ async function runAgent() {
         if (event.event === 'error') {
           ElMessage.error(event.data?.message || 'Agent 执行失败')
         }
-      }
+      },
+      { signal: agentController.signal }
     )
+    if (kb !== selectedKbId.value) return
     await Promise.all([loadAgentSessions(), loadAgentRuns(selectedAgentSessionId.value)])
   } catch (error) {
-    ElMessage.error(error.message)
+    if (error.name !== 'AbortError') ElMessage.error(error.message)
   } finally {
     agentLoading.value = false
   }
@@ -520,7 +540,7 @@ function statusType(status) {
         </div>
         <div>
           <h1>StudyFlow</h1>
-          <p>RAG 知识库问答平台</p>
+          <p>你的资料与原文证据，连接在一起</p>
         </div>
       </div>
 
@@ -554,15 +574,15 @@ function statusType(status) {
         </div>
         <div>
           <h1>StudyFlow</h1>
-          <p>{{ currentUser?.nickname || currentUser?.username }}</p>
+          <p>KNOWLEDGE WORKSPACE</p>
         </div>
       </div>
-      <el-button :icon="LogOut" @click="logout">退出</el-button>
+      <div class="user-chip"><span>{{ currentUser?.nickname || currentUser?.username }}</span><el-button text :icon="LogOut" @click="logout">退出</el-button></div>
     </header>
 
     <aside class="sidebar">
       <div class="sidebar-header">
-        <h2>知识库</h2>
+        <h2>我的知识空间</h2>
         <el-button :icon="RefreshCw" circle @click="loadKnowledgeBases" />
       </div>
       <div class="kb-list">
@@ -593,6 +613,9 @@ function statusType(status) {
       </div>
 
       <el-tabs v-model="activeTab" class="work-tabs">
+        <el-tab-pane label="知识概览" name="overview">
+          <KnowledgeOverview :knowledge-base-id="selectedKbId" :name="selectedKb?.name" :refresh-key="overviewEpoch" @navigate="activeTab = $event" />
+        </el-tab-pane>
         <el-tab-pane label="资料" name="documents">
           <section class="panel">
             <div class="panel-head">
@@ -600,8 +623,8 @@ function statusType(status) {
               <el-button :icon="RefreshCw" @click="loadDocuments">刷新</el-button>
             </div>
             <div class="ocr-note">
-              <strong>PaddleOCR 已接入</strong>
-              <span>普通 PDF 使用 PDFBox；扫描页与 JPG/PNG/WebP 自动走 OCR，并保留页码与置信度。</span>
+              <strong>让资料成为知识</strong>
+              <span>支持 PDF、Markdown、TXT 和图片。扫描件与图片需配置 OCR；摘要单独生成，不影响资料检索。</span>
             </div>
             <div class="upload-row">
               <el-upload
@@ -618,6 +641,12 @@ function statusType(status) {
               <el-progress :percentage="uploadProgress" />
               <span>{{ uploadStatus || 'READY' }}</span>
             </div>
+            <form class="document-filters" @submit.prevent="loadDocuments()">
+              <el-input v-model="documentFilter.keyword" placeholder="按文件名筛选资料" clearable maxlength="200" />
+              <el-select v-model="documentFilter.status" placeholder="全部状态" clearable @change="loadDocuments()">
+                <el-option label="可检索" value="SUCCESS" /><el-option label="处理中" value="PROCESSING" /><el-option label="等待处理" value="PENDING" /><el-option label="需要处理" value="FAILED" />
+              </el-select><el-button native-type="submit">筛选</el-button>
+            </form>
             <el-table :data="documents" height="420">
               <el-table-column prop="originalFileName" label="文件名" min-width="210" />
               <el-table-column prop="fileType" label="类型" width="90" />
@@ -640,7 +669,9 @@ function statusType(status) {
                   <small v-if="row.ocrElapsedMs"> · {{ row.ocrElapsedMs }}ms</small>
                 </template>
               </el-table-column>
-              <el-table-column prop="summary" label="摘要" min-width="260" show-overflow-tooltip />
+              <el-table-column label="摘要" min-width="260">
+                <template #default="{ row }"><span v-if="row.summaryStatus === 'SUCCESS'">{{ row.summary }}</span><el-tag v-else-if="['FAILED', 'RETRYING'].includes(row.summaryStatus)" type="warning">摘要暂不可用，资料可继续检索</el-tag><span v-else class="subtle">{{ row.summaryStatus === 'NOT_REQUESTED' ? '重建后可生成摘要' : '正在独立生成摘要' }}</span><small v-if="row.summaryTruncated" class="subtle">（基于前 {{ row.summaryInputChars }} 字符）</small></template>
+              </el-table-column>
               <el-table-column label="操作" width="160">
                 <template #default="{ row }">
                   <el-button size="small" :disabled="['PENDING', 'PROCESSING'].includes(row.parseStatus)" @click="rebuildDocument(row)">重建</el-button>
@@ -650,46 +681,12 @@ function statusType(status) {
                 </template>
               </el-table-column>
             </el-table>
+            <el-button v-if="documentHasMore" class="load-more" @click="loadDocuments(true)">加载更多资料</el-button>
           </section>
         </el-tab-pane>
 
-        <el-tab-pane label="搜索" name="search">
-          <section class="panel">
-            <div class="panel-head">
-              <h3>资料检索</h3>
-              <el-select v-model="searchForm.mode" style="width: 160px" aria-label="检索方式">
-                <el-option label="混合检索" value="RRF" />
-                <el-option label="关键词检索" value="BM25" />
-                <el-option label="语义检索" value="VECTOR" />
-              </el-select>
-              <el-input v-model="searchForm.keyword" class="search-input" placeholder="关键词">
-                <template #append>
-                  <el-button :icon="Search" @click="searchDocuments" />
-                </template>
-              </el-input>
-            </div>
-            <div class="result-list">
-              <article v-for="item in searchResults" :key="item.chunkId" class="result-item">
-                <div class="result-meta">
-                  <FileSearch :size="16" />
-                  <strong>{{ item.fileName }}</strong>
-                  <span>chunk {{ item.chunkIndex }}</span>
-                  <span v-if="item.pageNumber">第 {{ item.pageNumber }} 页</span>
-                  <span v-if="item.parserType">{{ item.parserType }}</span>
-                  <span v-if="item.ocrConfidence != null">OCR {{ Number(item.ocrConfidence).toFixed(2) }}</span>
-                  <span>score {{ Number(item.score || 0).toFixed(2) }}</span>
-                  <span>{{ item.source || 'BM25' }}</span>
-                </div>
-                <div class="score-row">
-                  <span>BM25 {{ Number(item.bm25Score || 0).toFixed(2) }}</span>
-                  <span>Vector {{ item.vectorScore == null ? '-' : Number(item.vectorScore).toFixed(2) }}</span>
-                  <span>Rerank {{ Number(item.rerankScore || 0).toFixed(2) }}</span>
-                  <span>{{ item.hasEmbedding ? item.embeddingModel || 'embedding' : 'no embedding' }}</span>
-                </div>
-                <p>{{ item.content }}</p>
-              </article>
-            </div>
-          </section>
+        <el-tab-pane label="知识检索" name="search">
+          <SearchWorkbench :knowledge-base-id="selectedKbId" />
         </el-tab-pane>
 
         <el-tab-pane label="问答" name="qa">
@@ -712,11 +709,12 @@ function statusType(status) {
 
             <div class="panel qa-main">
               <div class="ask-box">
-                <el-input v-model="qaForm.question" type="textarea" :rows="3" resize="none" />
+                <el-input v-model="qaForm.question" type="textarea" :rows="3" resize="none" aria-label="知识库问题" placeholder="基于当前知识库提问，例如：这些资料如何解释数据库事务？" />
                 <div class="ask-actions">
                   <el-button :icon="Search" @click="retrieveChunks">召回</el-button>
                   <el-button type="primary" :icon="Send" :loading="askLoading" @click="ask">问答</el-button>
                   <el-button type="success" :icon="Send" :loading="streamLoading" @click="askStream">流式</el-button>
+                  <el-button v-if="streamLoading" @click="streamController?.abort()">停止接收</el-button>
                 </div>
               </div>
 
@@ -728,7 +726,7 @@ function statusType(status) {
               <div class="messages">
                 <article v-for="message in messages" :key="message.id" class="message" :class="message.role.toLowerCase()">
                   <div class="message-role">{{ message.role }}</div>
-                  <p>{{ message.content }}</p>
+                  <p v-if="!message.claims?.length">{{ message.content }}</p>
                   <small v-if="message.verificationMode === 'EXTRACTIVE_ONLY'">原文摘录</small>
                   <small v-else-if="message.answerStatus === 'SUPPORTED'">结论已核验</small>
                   <small v-else-if="message.answerStatus === 'VERIFICATION_UNAVAILABLE'">核验服务暂不可用</small>
@@ -741,7 +739,7 @@ function statusType(status) {
                       </button>
                     </article>
                   </div>
-                  <div v-if="message.citations?.length" class="citation-row">
+                  <div v-if="message.citations?.length && !message.claims?.length" class="citation-row">
                     <button
                       v-for="citation in message.citations"
                       :key="citation.citationId"

@@ -31,4 +31,18 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getCode()).isEqualTo(400);
     }
+    @Test
+    void unexpectedServerErrorsDoNotExposeDatabaseOrProviderMessages() {
+        var response=handler.handleException(new IllegalStateException("SQL password=private-api-key"));
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+        assertThat(response.getBody().getMessage()).doesNotContain("password","private-api-key","SQL");
+    }
+
+    @Test
+    void invalidSearchWindowsReturnClientError() {
+        var response=handler.handleArgumentException(new IllegalArgumentException("private details"));
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody().getCode()).isEqualTo(400);
+    }
+
 }

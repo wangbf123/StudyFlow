@@ -64,6 +64,8 @@ studyflow:
     lease-seconds: ${STUDYFLOW_PIPELINE_LEASE_SECONDS:60}
     max-retry-delay-seconds: ${STUDYFLOW_PIPELINE_MAX_RETRY_DELAY:300}
     batch-size: ${STUDYFLOW_PIPELINE_BATCH_SIZE:20}
+    chunk-batch-size: ${STUDYFLOW_CHUNK_BATCH_SIZE:64}
+    summary-max-chars: ${STUDYFLOW_SUMMARY_MAX_CHARS:12000}
   search:
     index: ${STUDYFLOW_SEARCH_INDEX:studyflow_document_chunk_v2}
     mode: ${STUDYFLOW_SEARCH_MODE:RRF}
@@ -166,3 +168,23 @@ knife4j:
 logging:
   level:
     com.studyflow: info
+
+# Keep operational endpoints on a separate loopback listener by default.
+management:
+  server:
+    port: ${STUDYFLOW_MANAGEMENT_PORT:9091}
+    address: ${STUDYFLOW_MANAGEMENT_ADDRESS:127.0.0.1}
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db,redis,elasticsearch
+        liveness:
+          include: livenessState

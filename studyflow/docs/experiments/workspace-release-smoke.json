@@ -1,0 +1,13 @@
+{
+  "status": "PASS",
+  "checks": [
+    "release JAR boots two instances",
+    "previous Redis token valid on both after restart",
+    "bounded EMBED/INDEX with chunk batch size 2",
+    "independent SUMMARY completes through dedicated executor",
+    "summary executor metrics registered",
+    "request ID echoed safely"
+  ],
+  "fixture_chunk_count": 5,
+  "chunk_batch_size": 2
+}

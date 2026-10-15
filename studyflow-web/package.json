@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0 --port 4173"
+    "preview": "vite preview --host 0.0.0.0 --port 4173",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "@vitejs/plugin-vue": "^5.2.1",
@@ -16,5 +17,7 @@
     "vite": "^6.0.7",
     "vue": "^3.5.13"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "unplugin-vue-components": "^0.27.5"
+  }
 }

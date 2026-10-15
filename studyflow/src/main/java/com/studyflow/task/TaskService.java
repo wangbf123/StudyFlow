@@ -25,6 +25,8 @@ public class TaskService {
         if (!TaskStatus.FAILED.equals(task.getStatus()) && !TaskStatus.RETRYING.equals(task.getStatus())) {
             throw new BusinessException("只有失败或待重试任务可以手动重试");
         }
+        if (jdbc.queryForList("SELECT id FROM document WHERE id=? AND user_id=? FOR UPDATE", Long.class,
+                task.getDocumentId(),userId).isEmpty()) throw new BusinessException("文档不存在或无权限访问");
         int changed = jdbc.update("""
                 UPDATE parse_task t JOIN document d ON d.id=t.document_id
                 JOIN knowledge_base k ON k.id=d.knowledge_base_id
@@ -35,6 +37,7 @@ public class TaskService {
                     (t.stage<>'CLEANUP' AND d.parse_status<>'DELETED' AND k.status='ACTIVE'))
                 """, taskId, userId);
         if (changed == 0) throw new BusinessException("任务已失效或正在处理中");
+        if ("SUMMARY".equals(task.getStage())) jdbc.update("UPDATE document SET summary_status='PENDING' WHERE id=?",task.getDocumentId());
         pipeline.enqueue(taskId, task.getStage());
         return TaskResponse.from(parseTaskMapper.selectById(taskId));
     }

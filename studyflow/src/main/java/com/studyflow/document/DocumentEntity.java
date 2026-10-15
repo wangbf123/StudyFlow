@@ -29,6 +29,9 @@ public class DocumentEntity {
     private Integer ocrPageCount;
     private Long ocrElapsedMs;
     private String summary;
+    private String summaryStatus;
+    private Integer summaryInputChars;
+    private Boolean summaryTruncated;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;

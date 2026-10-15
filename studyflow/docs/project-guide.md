@@ -2,6 +2,8 @@
 
 [← 返回项目首页](../../README.md)
 
+2026-10-15 的新增工作台、独立摘要、共享会话与运行方式详见[使用指南](guides/knowledge-base.md)、[当前架构](architecture-v2.md)及[升级验收](workspace-upgrade-verification.md)。
+
 StudyFlow 是一个面向个人学习、团队知识沉淀和私有资料研究场景的智能知识库平台。系统把散落在 PDF、Markdown、TXT 和图片中的内容转换为可检索、可引用、可持续积累的结构化知识，并在此基础上提供全文搜索、混合检索、RAG 问答、来源追踪、质量评估和学习 Agent。
 
 它的重点不是把问题直接转发给大模型，而是完整实现从文件进入系统到可信答案输出的工程链路：大文件分片上传、对象存储、异步解析、PDF/OCR 混合提取、文本切分、向量生成、Elasticsearch 索引、BM25 与向量融合、重排、上下文预算、答案引用校验、会话持久化和 SSE 实时推送。
@@ -505,7 +507,7 @@ powershell -ExecutionPolicy Bypass -File scripts\ocr-service-demo.ps1 -File "C:\
 
 ### 阶段三：任务系统与可靠性
 
-- 已拆分解析、embedding、索引及清理；继续将摘要从 PARSE 中移为独立支线，并实现大文件流式处理。
+- 已实现独立摘要支线与分批向量 / 索引处理；继续完善大文件流式解析及物理对象回收。
 - 已采用事务 Outbox；补充真实 RocketMQ 集群故障与多实例容量实验。
 - 支持任务取消、超时、死信队列、指数退避、幂等消费和失败补偿。
 - 增加索引对账和自动修复，定期检查 MySQL 分片与 Elasticsearch 文档差异。

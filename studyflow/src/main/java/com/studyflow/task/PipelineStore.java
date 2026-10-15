@@ -28,6 +28,9 @@ public class PipelineStore {
     private final EmbeddingProperties embeddingProperties;
 
     public ParseTaskEntity create(DocumentEntity document, PipelineStage stage) {
+        if (stage == PipelineStage.SUMMARY) {
+            jdbc.update("UPDATE document SET summary_status='PENDING' WHERE id=? AND generation=?", document.getId(), document.getGeneration());
+        }
         ParseTaskEntity task = new ParseTaskEntity();
         task.setTaskNo("PT" + UUID.randomUUID().toString().replace("-", ""));
         task.setDocumentId(document.getId());
@@ -74,7 +77,9 @@ public class PipelineStore {
             // Read through a token-qualified query so the returned object contains this lease.
             ParseTaskEntity task = tasks.selectOne(Wrappers.<ParseTaskEntity>lambdaQuery()
                     .eq(ParseTaskEntity::getId, taskId).eq(ParseTaskEntity::getClaimToken, token));
-            if (!PipelineStage.CLEANUP.name().equals(task.getStage())) {
+            if (PipelineStage.SUMMARY.name().equals(task.getStage())) {
+                jdbc.update("UPDATE document SET summary_status='PROCESSING' WHERE id=? AND generation=?", task.getDocumentId(), task.getGeneration());
+            } else if (!PipelineStage.CLEANUP.name().equals(task.getStage())) {
                 jdbc.update("UPDATE document SET parse_status='PROCESSING',update_time=NOW() WHERE id=? AND generation=? AND parse_status<>'DELETED'",
                         task.getDocumentId(), task.getGeneration());
             }
@@ -91,6 +96,15 @@ public class PipelineStore {
 
     /** Fence stale workers and serialize checkpoint publication with rebuild/deletion. */
     public boolean checkpoint(ParseTaskEntity claimed, Consumer<DocumentEntity> work) {
+        return commitCheckpoint(claimed, work, true);
+    }
+
+    /** Persist one bounded batch without advancing the durable stage. */
+    public boolean checkpointBatch(ParseTaskEntity claimed, Consumer<DocumentEntity> work) {
+        return commitCheckpoint(claimed, work, false);
+    }
+
+    private boolean commitCheckpoint(ParseTaskEntity claimed, Consumer<DocumentEntity> work, boolean advance) {
         Boolean committed = transactions.execute(status -> {
             jdbc.queryForList("SELECT id FROM document WHERE id=? FOR UPDATE", Long.class, claimed.getDocumentId());
             List<Long> locked = jdbc.queryForList("""
@@ -109,13 +123,20 @@ public class PipelineStore {
                 return false;
             }
             work.accept(document);
+            if (!advance) return true;
             PipelineStage next = PipelineStage.valueOf(claimed.getStage()).next();
             if (next == null) {
                 jdbc.update("""
                         UPDATE parse_task SET status='SUCCESS',claim_token=NULL,lease_until=NULL,
                           finished_time=NOW(),error_message=NULL,update_time=NOW() WHERE id=?
                         """, claimed.getId());
-                if (!cleanup) jdbc.update("UPDATE document SET parse_status='SUCCESS',update_time=NOW() WHERE id=?", document.getId());
+                if (PipelineStage.SUMMARY.name().equals(claimed.getStage())) {
+                    jdbc.update("UPDATE document SET summary_status='SUCCESS',update_time=NOW() WHERE id=?", document.getId());
+                } else if (!cleanup) {
+                    jdbc.update("UPDATE document SET parse_status='SUCCESS',update_time=NOW() WHERE id=?", document.getId());
+                    // Index readiness never waits on a model-generated derived summary.
+                    create(document, PipelineStage.SUMMARY);
+                }
             } else {
                 jdbc.update("""
                         UPDATE parse_task SET stage=?,status='PENDING',claim_token=NULL,lease_until=NULL,
@@ -142,42 +163,68 @@ public class PipelineStore {
                       next_attempt_time=TIMESTAMPADD(SECOND,?,NOW(6)),finished_time=NOW(),update_time=NOW() WHERE id=?
                     """, state, attempt, message.substring(0, Math.min(1000, message.length())),
                     properties.retryDelay(attempt), task.getId());
-            if (!PipelineStage.CLEANUP.name().equals(task.getStage())) jdbc.update("""
+            if (PipelineStage.SUMMARY.name().equals(task.getStage())) {
+                jdbc.update("UPDATE document SET summary_status=?,update_time=NOW() WHERE id=? AND generation=? AND parse_status<>'DELETED'",
+                        state, task.getDocumentId(), task.getGeneration());
+            } else if (!PipelineStage.CLEANUP.name().equals(task.getStage())) jdbc.update("""
                     UPDATE document SET parse_status=?,update_time=NOW() WHERE id=? AND generation=? AND parse_status<>'DELETED'
                     """, TaskStatus.FAILED.equals(state) ? DocumentStatus.FAILED : DocumentStatus.PENDING,
                     task.getDocumentId(), task.getGeneration());
         });
     }
 
+    /** Bounded recovery locks document before task, matching worker/rebuild lock order. */
     public void recover() {
-        transactions.executeWithoutResult(status -> {
-            jdbc.update("""
-                    UPDATE parse_task t LEFT JOIN document d ON d.id=t.document_id
-                      LEFT JOIN knowledge_base k ON k.id=d.knowledge_base_id
-                    SET t.status='CANCELLED',t.claim_token=NULL,t.lease_until=NULL,t.finished_time=NOW(),t.update_time=NOW()
-                    WHERE t.status IN ('PENDING','RETRYING','PROCESSING') AND
-                      (d.id IS NULL OR t.generation<>d.generation OR
-                       (t.stage<>'CLEANUP' AND (d.parse_status='DELETED' OR k.status<>'ACTIVE')))
-                    """);
-            jdbc.update("""
-                    UPDATE parse_task SET status=IF(retry_count+1>=max_retry_count,'FAILED','RETRYING'),
-                      retry_count=retry_count+1,claim_token=NULL,lease_until=NULL,next_attempt_time=NOW(6),
-                      error_message='Worker lease expired; checkpoint retained',update_time=NOW()
-                    WHERE status='PROCESSING' AND lease_until<=NOW(6)
-                    """);
-            jdbc.update("""
-                    UPDATE document d JOIN parse_task t ON t.document_id=d.id AND t.generation=d.generation
-                    SET d.parse_status='FAILED',d.update_time=NOW()
-                    WHERE t.status='FAILED' AND t.stage<>'CLEANUP' AND d.parse_status<>'DELETED'
-                    """);
-            jdbc.update("""
-                    INSERT INTO pipeline_outbox(task_id,stage)
-                    SELECT id,stage FROM parse_task WHERE status IN ('PENDING','RETRYING') AND next_attempt_time<=NOW(6)
-                    ON DUPLICATE KEY UPDATE
-                      status=IF(pipeline_outbox.status='SENT' AND pipeline_outbox.update_time<TIMESTAMPADD(SECOND,-10,NOW(6)), 'PENDING',pipeline_outbox.status)
-                    """);
+        List<long[]> due = jdbc.query("""
+                SELECT t.id,t.document_id FROM parse_task t
+                LEFT JOIN document d ON d.id=t.document_id LEFT JOIN knowledge_base k ON k.id=d.knowledge_base_id
+                WHERE t.status IN ('PENDING','RETRYING','PROCESSING') AND
+                  (d.id IS NULL OR t.generation<>d.generation OR
+                   (t.stage<>'CLEANUP' AND (d.parse_status='DELETED' OR k.status<>'ACTIVE' OR k.id IS NULL)) OR
+                   (t.status='PROCESSING' AND t.lease_until<=NOW(6)))
+                ORDER BY t.update_time,t.id LIMIT ?
+                """, (rs,row) -> new long[]{rs.getLong(1),rs.getLong(2)}, properties.batchSize());
+        for (long[] candidate : due) transactions.executeWithoutResult(status -> {
+            jdbc.queryForList("SELECT id FROM document WHERE id=? FOR UPDATE", Long.class, candidate[1]);
+            var current = jdbc.query("""
+                    SELECT t.stage,t.generation,t.retry_count,t.max_retry_count,t.status,
+                      (t.lease_until<=NOW(6)),d.generation,d.parse_status,k.status
+                    FROM parse_task t LEFT JOIN document d ON d.id=t.document_id
+                    LEFT JOIN knowledge_base k ON k.id=d.knowledge_base_id
+                    WHERE t.id=? AND t.status IN ('PENDING','RETRYING','PROCESSING') FOR UPDATE
+                    """, (rs,row) -> new RecoveryState(rs.getString(1),rs.getLong(2),rs.getInt(3),rs.getInt(4),
+                            rs.getString(5),rs.getBoolean(6),rs.getObject(7,Long.class),rs.getString(8),rs.getString(9)), candidate[0]);
+            if (current.isEmpty()) return;
+            RecoveryState task = current.getFirst();
+            boolean cancelled = task.documentGeneration() == null || task.generation() != task.documentGeneration()
+                    || (!"CLEANUP".equals(task.stage()) && ("DELETED".equals(task.documentStatus()) || !"ACTIVE".equals(task.kbStatus())));
+            if (cancelled) {
+                jdbc.update("UPDATE parse_task SET status='CANCELLED',claim_token=NULL,lease_until=NULL,finished_time=NOW(),update_time=NOW() WHERE id=?", candidate[0]);
+            } else if ("PROCESSING".equals(task.status()) && task.expired()) {
+                String next = task.retries() + 1 >= task.maxRetries() ? "FAILED" : "RETRYING";
+                jdbc.update("""
+                        UPDATE parse_task SET status=?,retry_count=retry_count+1,claim_token=NULL,lease_until=NULL,
+                          next_attempt_time=NOW(6),error_message='Worker lease expired; checkpoint retained',update_time=NOW() WHERE id=?
+                        """, next, candidate[0]);
+                if ("SUMMARY".equals(task.stage())) {
+                    jdbc.update("UPDATE document SET summary_status=?,update_time=NOW() WHERE id=?", next, candidate[1]);
+                } else if (!"CLEANUP".equals(task.stage())) {
+                    jdbc.update("UPDATE document SET parse_status=?,update_time=NOW() WHERE id=?",
+                            "FAILED".equals(next) ? "FAILED" : "PENDING", candidate[1]);
+                }
+            }
         });
+        jdbc.update("""
+                INSERT INTO pipeline_outbox(task_id,stage)
+                SELECT id,stage FROM parse_task WHERE status IN ('PENDING','RETRYING') AND next_attempt_time<=NOW(6)
+                ORDER BY next_attempt_time,id LIMIT ?
+                ON DUPLICATE KEY UPDATE
+                  status=IF(pipeline_outbox.status='SENT' AND pipeline_outbox.update_time<TIMESTAMPADD(SECOND,-10,NOW(6)), 'PENDING',pipeline_outbox.status)
+                """, properties.batchSize());
     }
+
+    private record RecoveryState(String stage,long generation,int retries,int maxRetries,String status,
+                                 boolean expired,Long documentGeneration,String documentStatus,String kbStatus) {}
 
     public record RetiredIndex(Long taskId, Long documentId, Long generation) {}
 

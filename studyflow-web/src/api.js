@@ -1,9 +1,12 @@
 import axios from 'axios'
+import { consumeSse } from './lib/sse'
+
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 
 const TOKEN_KEY = 'studyflow_token'
 
 export const api = axios.create({
-  baseURL: 'http://localhost:8080',
+  baseURL: API_BASE_URL,
   timeout: 120000
 })
 
@@ -38,84 +41,20 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY)
 }
 
-export async function streamAsk(payload, onEvent) {
-  const response = await fetch('http://localhost:8080/api/qa/ask/stream', {
+async function stream(path, payload, onEvent, terminalEvent, { signal } = {}) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: getToken() || ''
-    },
-    body: JSON.stringify(payload)
+    headers: { 'Content-Type': 'application/json', Authorization: getToken() || '' },
+    body: JSON.stringify(payload),
+    signal
   })
-  if (!response.ok || !response.body) {
-    throw new Error(`流式问答失败：HTTP ${response.status}`)
-  }
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder('utf-8')
-  let buffer = ''
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const events = buffer.split('\n\n')
-    buffer = events.pop() || ''
-    for (const raw of events) {
-      const event = parseSse(raw)
-      if (event) onEvent(event)
-    }
-  }
+  return consumeSse(response, onEvent, { signal, terminalEvent })
 }
 
-export async function streamAgent(payload, onEvent) {
-  const response = await fetch('http://localhost:8080/api/agent/runs/stream', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: getToken() || ''
-    },
-    body: JSON.stringify(payload)
-  })
-  if (!response.ok || !response.body) {
-    let message = `Agent 执行失败：HTTP ${response.status}`
-    try {
-      const body = await response.json()
-      message = body?.message || message
-    } catch {
-      // Keep the HTTP fallback when the response is not JSON.
-    }
-    throw new Error(message)
-  }
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder('utf-8')
-  let buffer = ''
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const events = buffer.split('\n\n')
-    buffer = events.pop() || ''
-    for (const raw of events) {
-      const event = parseSse(raw)
-      if (event) onEvent(event)
-    }
-  }
+export function streamAsk(payload, onEvent, options) {
+  return stream('/api/qa/ask/stream', payload, onEvent, 'message_end', options)
 }
 
-function parseSse(raw) {
-  const lines = raw.split('\n')
-  let event = 'message'
-  const dataLines = []
-  for (const line of lines) {
-    if (line.startsWith('event:')) event = line.slice(6).trim()
-    if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
-  }
-  if (!dataLines.length) return null
-  const text = dataLines.join('\n')
-  try {
-    return { event, data: JSON.parse(text) }
-  } catch {
-    return { event, data: text }
-  }
+export function streamAgent(payload, onEvent, options) {
+  return stream('/api/agent/runs/stream', payload, onEvent, 'run_end', options)
 }

@@ -1,0 +1,23 @@
+{
+  "status": "PASS",
+  "generated_at": "2026-10-15T07:11:38.083570+00:00",
+  "checks": [
+    "same Redis-backed token accepted by a second backend instance",
+    "same token remains valid after isolated application process restart without re-login",
+    "24 document uploads finish the primary INDEX stage with independent SUMMARY tasks",
+    "workspace aggregates reflect current-generation documents, vectors, summaries and recent tasks",
+    "cursor document pages do not overlap",
+    "real BGE/ES retrieval exposes original ranks and RRF contributions",
+    "claim evidence persists with current-version original-text quotes",
+    "cross-user overview, document cursor and task endpoints deny access",
+    "five retrieval modes evaluated through the upgraded Java API"
+  ],
+  "document_count": 24,
+  "embedding_model": "BAAI/bge-small-zh-v1.5@7999e1d3359715c523056ef9478215996d62a620",
+  "mq_mode": "async",
+  "qa_mode": "EXTRACTIVE_ONLY",
+  "fixture_rate_limit": "disabled",
+  "ocr": "not exercised",
+  "independent_semantic_quality": "not measured",
+  "production_capacity": "not measured"
+}

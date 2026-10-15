@@ -8,12 +8,13 @@ flowchart LR
     Tx --> Dispatcher[Outbox 租约领取]
     Dispatcher --> Wake[MQ SEND_OK / 本地线程池唤醒]
     Wake --> Claim[数据库 CAS 领取与续租]
-    Claim --> Parse[PARSE：读取、OCR、切分、摘要]
+    Claim --> Parse[PARSE：读取、OCR、切分]
     Parse --> CP1[短事务：分片检查点 + EMBED Outbox]
     CP1 --> Embed[EMBED：批量向量生成]
     Embed --> CP2[短事务：向量检查点 + INDEX Outbox]
     CP2 --> Index[INDEX：稳定 ID 幂等写入 ES]
-    Index --> CP3[短事务：文档与任务 SUCCESS]
+    Index --> CP3[短事务：文档与任务 SUCCESS + SUMMARY Outbox]
+    CP3 --> Summary[独立 SUMMARY：摘要与输入预算]
     Recovery[周期补扫 / 过期租约回收] --> Dispatcher
 ```
 
@@ -43,7 +44,9 @@ flowchart LR
 |---|---:|---|
 | `studyflow.pipeline.lease-seconds` | 60 | worker / dispatcher 租约，最小 15 秒 |
 | `studyflow.pipeline.scheduler-delay-ms` | 1000 | 补扫和投递间隔 |
-| `studyflow.pipeline.batch-size` | 20 | 每轮领取与索引对账批次，范围 1–100 |
+| `studyflow.pipeline.batch-size` | 20 | 每轮恢复、领取与索引对账批次，范围 1–100 |
+| `studyflow.pipeline.chunk-batch-size` | 64 | 向量 / 索引分页上限，范围 1–100 |
+| `studyflow.pipeline.summary-max-chars` | 12000 | 独立摘要输入预算，截断会记录 |
 | `studyflow.pipeline.max-retry-delay-seconds` | 300 | 重试退避上限 |
 | `studyflow.pipeline.index-reconcile-delay-ms` | 30000 | 退役索引重复对账间隔 |
 
@@ -70,9 +73,9 @@ mvn -Dpipeline.mysql.tests=true \
 
 真实 API 验证结果保存在 `experiments/highlights-e2e-results.json`；实际子进程中断恢复结果保存在 `experiments/pipeline-process-recovery-results.json`。前者包括真实 MinIO 文件读取、BGE 生成与 ES 索引；后者使用独立 Java 进程 SIGKILL 后重新启动，验证同一持久任务无需重新上传即可完成。MQ 使用 async 执行器，不能据此声称已测 RocketMQ 集群恢复。
 
-当前摘要仍在 PARSE 阶段，大文档仍采用整文件与全部分片的内存处理。独立摘要任务、流式解析、parser/chunker 的完整版本缓存以及索引 alias 灰度切换尚未实现；当前验证材料均为有界小文档。
+2026-10-15 起摘要为独立 SUMMARY 任务，INDEX 完成即可检索；摘要失败不改变主索引状态。EMBED 采用分批检查点并复用已完成向量，INDEX 分页幂等写入。PARSE 仍采用整文件与全部分片内存处理，流式解析、完整 parser/chunker 版本缓存和 alias 灰度切换尚未实现。
 
-复现进程故障时在独立实例上传测试文档，轮询任务至 PROCESSING，对该 Java 进程发送 SIGKILL，然后使用相同数据库、索引和模型配置重新启动。保持数据库及对象存储不变，重新登录后轮询原 taskId；租约回收后应进入 SUCCESS，分片编号无重复并可检索。默认登录会话为进程内存，重新登录是实验的一部分；此次验证不包含多实例登录会话持久化。
+复现进程故障时在独立实例上传测试文档，轮询任务至 PROCESSING，对该 Java 进程发送 SIGKILL，然后使用相同数据库、索引和模型配置重新启动。保持数据库及对象存储不变，重新登录后轮询原 taskId；租约回收后应进入 SUCCESS，分片编号无重复并可检索。上述为 2026-10-09 的历史实验，当时使用进程内会话；2026-10-15 已接入 Redis 共享会话，新实验验证同 token 跨实例和应用重启可用，见 [升级验收](workspace-upgrade-verification.md)。
 
 ## 简历表述
 

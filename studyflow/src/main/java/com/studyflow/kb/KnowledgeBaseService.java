@@ -59,7 +59,7 @@ public class KnowledgeBaseService {
         KnowledgeBaseEntity entity = knowledgeBaseMapper.selectOne(Wrappers.<KnowledgeBaseEntity>lambdaQuery()
                 .eq(KnowledgeBaseEntity::getId, id)
                 .eq(KnowledgeBaseEntity::getUserId, userId)
-                .ne(KnowledgeBaseEntity::getStatus, "DELETED"));
+                .eq(KnowledgeBaseEntity::getStatus, "ACTIVE"));
         if (entity == null) {
             throw new BusinessException("知识库不存在或无权限访问");
         }

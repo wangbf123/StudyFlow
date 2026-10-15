@@ -215,6 +215,11 @@ public class DocumentService {
         jdbc.queryForList("SELECT id FROM document WHERE id=? AND user_id=? FOR UPDATE", Long.class, documentId, userId);
         DocumentEntity document = getOwnedDocument(userId, documentId);
         cancelTasks(documentId);
+        jdbc.update("UPDATE document SET summary=NULL,summary_status='PENDING',summary_input_chars=NULL,summary_truncated=FALSE WHERE id=?", documentId);
+        document.setSummary(null);
+        document.setSummaryStatus("PENDING");
+        document.setSummaryInputChars(null);
+        document.setSummaryTruncated(false);
         document.setGeneration(document.getGeneration() + 1);
         document.setParseStatus(DocumentStatus.PENDING);
         documentMapper.updateById(document);
@@ -228,6 +233,7 @@ public class DocumentService {
         DocumentEntity document = getOwnedDocument(userId, documentId);
         cancelTasks(documentId);
         document.setParseStatus(DocumentStatus.DELETED);
+        document.setSummaryStatus("CANCELLED");
         documentMapper.updateById(document);
         pipeline.create(document, PipelineStage.CLEANUP);
         // Objects may be shared by same-owner duplicate uploads; retention cleanup is separate.

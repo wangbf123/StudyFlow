@@ -25,8 +25,8 @@ public class CorsPreflightFilter extends OncePerRequestFilter {
         if (origin != null && isAllowedOrigin(origin)) {
             response.setHeader("Access-Control-Allow-Origin", origin);
             response.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
-            response.setHeader("Access-Control-Allow-Headers", "Authorization,Content-Type");
-            response.setHeader("Access-Control-Expose-Headers", "Authorization");
+            response.setHeader("Access-Control-Allow-Headers", "Authorization,Content-Type,X-Request-Id");
+            response.setHeader("Access-Control-Expose-Headers", "Authorization,X-Request-Id");
             response.setHeader("Access-Control-Max-Age", "3600");
         }
         if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
