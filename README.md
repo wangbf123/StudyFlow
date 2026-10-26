@@ -22,6 +22,16 @@
 
 StudyFlow 是面向个人学习与私有资料研究的知识库。PDF、TXT、Markdown 和图片经持久任务处理后进入检索；问答返回结论、引用原文与位置，用户能直接核对来源。Vue 前端支持资料管理、检索、问答、历史会话和只读学习 Agent。
 
+## 30 秒了解 StudyFlow
+
+上传课程笔记、论文或项目资料，检索相关原文，再核对回答引用的位置。适合需要追溯来源的个人资料学习与研究。
+
+- **看效果**：[真实工作台](.github/assets/knowledge-workspace.png)、[混合检索](.github/assets/knowledge-search.png)、[引用原文](.github/assets/knowledge-evidence.png)。
+- **开始体验**：[最小启动命令](#快速开始)，默认原文摘录问答无需模型密钥；需要 MySQL、Redis、MinIO、Elasticsearch。
+- **看实现**：[引用与故障恢复文章](docs/articles/evidence-and-recovery.md)，以及 [检索实验入口](retrieval-lab/README.md)。
+
+*A Spring Boot RAG knowledge base with hybrid search, verifiable citations, and recoverable document processing.*
+
 ## 界面预览
 
 从“我的知识空间”开始，查看资料就绪情况、语义索引覆盖及独立摘要任务，再进入检索与问答。
