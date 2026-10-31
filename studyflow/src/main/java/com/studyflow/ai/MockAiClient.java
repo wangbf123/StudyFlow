@@ -14,7 +14,6 @@ import java.util.regex.Pattern;
 public class MockAiClient implements AiClient {
 
     private static final Pattern SOURCE_ID_PATTERN = Pattern.compile("Source ID:\\s*(S\\d+)", Pattern.CASE_INSENSITIVE);
-    private static final Pattern AGENT_SOURCE_ID_PATTERN = Pattern.compile("\\b(C\\d+)\\b", Pattern.CASE_INSENSITIVE);
 
     @Override
     public AiResult summarize(String title, String content) {
@@ -33,11 +32,8 @@ public class MockAiClient implements AiClient {
             String query = request.question() == null ? "" : request.question().replaceAll("\\s+", " ").trim();
             return new AiChatResponse("{\"query\":\"" + escapeJson(query) + "\"}", "mock-rag", 0, 0);
         }
-        if (contains(request.systemPrompt(), "StudyFlow learning agent orchestrator")) {
-            return mockAgentDecision(request);
-        }
-        if (contains(request.systemPrompt(), "StudyFlow learning agent final answer synthesizer")) {
-            return mockAgentSynthesis(request);
+        if (contains(request.systemPrompt(), "StudyFlow task planner")) {
+            return new AiChatResponse("{\"steps\":[\"检查知识库资料范围\",\"检索目标相关证据并阅读原文\",\"核验结论并生成带引用的报告\"]}", "mock-agent-planner", 0, 0);
         }
         if (contains(request.systemPrompt(), "trusted RAG answer generator")) {
             return structuredRagAnswer(request);
@@ -81,44 +77,33 @@ public class MockAiClient implements AiClient {
         } catch (Exception ex) { throw new IllegalStateException(ex); }
     }
 
-    private AiChatResponse mockAgentDecision(AiChatRequest request) {
-        String prompt = request.userPrompt() == null ? "" : request.userPrompt();
-        String goal = request.question() == null ? "" : request.question().replaceAll("\\s+", " ").trim();
-        if (!prompt.contains("<observation ")) {
-            String content = "{\"action\":\"tool\",\"tool\":\"search_knowledge\","
-                    + "\"arguments\":{\"query\":\"" + escapeJson(goal) + "\",\"topK\":5},"
-                    + "\"summary\":\"Search the knowledge base for grounded evidence\"}";
-            return new AiChatResponse(content, "mock-agent", 0, 0);
-        }
-
-        Set<String> sourceIds = extractAgentSourceIds(prompt);
-        String sourceText = sourceIds.stream().limit(3).map(id -> "[" + id + "]")
-                .reduce((left, right) -> left + " " + right).orElse("");
-        String answer = "Mock Agent completed a real tool-selection loop for: " + goal + ". "
-                + "The answer should be synthesized from the retrieved observations " + sourceText + ". "
-                + "Configure an OpenAI-compatible provider to generate a full semantic answer.";
-        String content = "{\"action\":\"final\",\"finalAnswer\":\"" + escapeJson(answer) + "\","
-                + "\"summary\":\"Answer from the retrieved evidence\"}";
-        return new AiChatResponse(content, "mock-agent", 0, 0);
-    }
-
-    private AiChatResponse mockAgentSynthesis(AiChatRequest request) {
-        String prompt = request.userPrompt() == null ? "" : request.userPrompt();
-        Set<String> sourceIds = extractAgentSourceIds(prompt);
-        String sourceText = sourceIds.stream().limit(3).map(id -> "[" + id + "]")
-                .reduce((left, right) -> left + " " + right).orElse("no source id");
-        String answer = "Mock Agent reached its step limit and synthesized the available evidence: " + sourceText
-                + ". Configure an OpenAI-compatible provider for a full semantic answer.";
-        return new AiChatResponse(answer, "mock-agent", 0, 0);
-    }
-
-    private Set<String> extractAgentSourceIds(String prompt) {
-        Matcher matcher = AGENT_SOURCE_ID_PATTERN.matcher(prompt);
-        Set<String> sourceIds = new LinkedHashSet<>();
-        while (matcher.find()) {
-            sourceIds.add(matcher.group(1).toUpperCase());
-        }
-        return sourceIds;
+    @Override
+    public AiToolResponse callTool(AiToolRequest request) {
+        try {
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var context = mapper.readTree(request.userPrompt());
+            var observations = context.path("observations");
+            java.util.Set<String> used=new java.util.HashSet<>();String noteId=null;
+            for(var observation:observations) {
+                used.add(observation.path("tool").asText());
+                if("search_notes".equals(observation.path("tool").asText())) {
+                    // Compacted observations may contain a non-JSON excerpt or only a result reference.
+                    try {
+                        var items=mapper.readTree(observation.path("content").asText("{}" )).path("items");
+                        if(!items.isEmpty())noteId=items.get(0).path("id").asText();
+                    } catch (com.fasterxml.jackson.core.JsonProcessingException ignored) { }
+                }
+            }
+            var explicit=java.util.regex.Pattern.compile("note:([0-9]+)").matcher(request.question()==null?"":request.question());
+            if(explicit.find())noteId=explicit.group(1);
+            if(!context.path("contextNoteId").asText("").isBlank())noteId=context.path("contextNoteId").asText();
+            if(!used.contains("knowledge_overview"))return new AiToolResponse("knowledge_overview",mapper.createObjectNode(),"mock-agent-tools",0,0);
+            if(!used.contains("search_notes"))return new AiToolResponse("search_notes",mapper.createObjectNode().put("query","").put("size",5),"mock-agent-tools",0,0);
+            if(noteId!=null&&!used.contains("read_note"))return new AiToolResponse("read_note",mapper.createObjectNode().put("noteId",noteId),"mock-agent-tools",0,0);
+            if(noteId!=null&&!used.contains("explore_graph"))return new AiToolResponse("explore_graph",mapper.createObjectNode().put("noteId",noteId),"mock-agent-tools",0,0);
+            if(!used.contains("search_knowledge"))return new AiToolResponse("search_knowledge",mapper.createObjectNode().put("query",request.question()).put("topK",5),"mock-agent-tools",0,0);
+            return new AiToolResponse("finish_research",mapper.createObjectNode(),"mock-agent-tools",0,0);
+        } catch (Exception ex) { throw new IllegalStateException("Invalid mock agent context", ex); }
     }
 
     private Set<String> extractSourceIds(String prompt) {

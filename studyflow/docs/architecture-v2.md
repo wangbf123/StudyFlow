@@ -1,5 +1,8 @@
 # StudyFlow 知识库架构 · 2026-10
 
+本文记录资料工作台阶段的架构。当前个人知识工作区见 [知识库与图谱](agent/personal-knowledge-architecture.md)，Agent 执行层以 [四层十二模块 Harness](agent/harness-architecture.md) 为准。
+
+
 ## 系统边界
 
 ```mermaid

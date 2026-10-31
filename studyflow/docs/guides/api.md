@@ -46,3 +46,29 @@ BM25 / VECTOR 单路模式返回该路排序；RRF 按两路贡献和排序；RR
 HTTP 返回 `X-Request-Id`，服务端只接受安全字符且长度不超过 64 的传入值，否则生成 UUID。请求 ID 传播到异步线程日志。诊断时提供该 ID，不提交 token、密码或完整私有文档内容。
 
 所有新知识库端点先检查所属用户和 ACTIVE 状态，聚合 SQL 再带 user_id / knowledge_base_id 过滤。当前版本统计排除旧 generation 与已删除文档。
+
+## 个人知识工作区与笔记
+
+知识库创建/更新增加 `parentId`、`templateKey`、`color`；目录最多十二层，拒绝循环。父子层级用于组织，不自动扩大任何任务的权限。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET / POST | `/api/notes` | 列表按 knowledgeBaseIds 查询，支持 before、size、query；创建 revision=0 |
+| GET / PUT | `/api/notes/{id}` | 读取/保存；更新必须提供当前 revision，冲突保留原数据 |
+| DELETE | `/api/notes/{id}?revision=...` | 版本校验后删除 |
+| POST | `/api/notes/{id}/move` | knowledgeBaseId、revision，稳定链接 ID 保留 |
+| GET | `/api/notes/{id}/backlinks` | 在指定 knowledgeBaseIds 范围查询反向链接 |
+| GET | `/api/notes/graph` | knowledgeBaseIds，可选 focus；有界图与投影状态 |
+| GET | `/api/notes/{id}/revisions`、`/revisions/{version}` | 历史目录与历史正文 |
+
+笔记写入包含 knowledgeBaseId、title、body、revision、tags、properties、kind。kind 支持 NOTE、CONCEPT、PROJECT、DECISION、JOURNAL、REPORT；Wiki 链接解析和版本快照与笔记原子提交。Markdown 导出由前端生成，不存在单独的笔记导出 API。
+
+## 持久化 Agent 与 Harness 管理
+
+当前任务通过 `POST /api/agent/runs` 创建，再按 `GET /api/agent/runs/{id}/events/stream?after=...` 订阅。任务状态与 HTTP 连接分离；取消必须显式调用 `/cancel`。SSE 中的 `agent_event` 带有序 seq，`run_end` 是终止事件。
+
+创建字段包括 knowledgeBaseId、knowledgeBaseIds（最多八个）、sessionId、goal、skill、contextNoteId、collaboration、requestKey。主库会纳入任务范围，Skill 支持 research、compare、review、organize、coding；collaboration 默认关闭。相同 requestKey 和相同请求返回同一 run，不同内容复用同一标识返回冲突。
+
+状态包括 QUEUED、RUNNING、RETRY_WAIT、SUCCESS、ABSTAINED、FAILED、CANCELLED、TIMED_OUT、BUDGET_EXCEEDED。终态后重试创建新 run，保留旧轨迹；成功报告可下载，或幂等保存回选定知识库。
+
+完整路由见 [Agent API](../LEARNING_AGENT.md#api-与事件)。`GET /api/agent/architecture` 返回脱敏模块目录；记忆、MCP 绑定、运行诊断和评估字段见 [Harness 管理 API](../agent/harness-architecture.md#10-api-与验证)。模型/MCP 地址、凭据和工具白名单由服务端配置，不从创建任务请求中接受。

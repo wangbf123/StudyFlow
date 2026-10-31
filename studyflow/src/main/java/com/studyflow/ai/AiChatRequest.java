@@ -5,6 +5,8 @@ public record AiChatRequest(
         String userPrompt,
         String question,
         String model,
-        Double temperature
+        Double temperature,
+        Integer maxOutputTokens
 ) {
+    public AiChatRequest(String system,String user,String question,String model,Double temperature) {this(system,user,question,model,temperature,null);}
 }

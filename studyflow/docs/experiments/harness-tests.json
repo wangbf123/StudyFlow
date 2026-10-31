@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-31",
+  "backend": {
+    "tests": 133,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "suites": 29,
+  "realDependencies": [
+    "MySQL 8.4",
+    "Elasticsearch 8.15.3",
+    "Neo4j 5.26.32",
+    "Docker Python digest-pinned sandbox"
+  ],
+  "mcp": "Official SDK 2.1.0 against local HTTP fixture",
+  "anthropic": "Official SDK 3.3.0 against local native Messages/Tool Use fixture",
+  "frontend": {
+    "tests": 13,
+    "failures": 0,
+    "build": "PASS"
+  },
+  "remoteModelQuality": "NOT_MEASURED",
+  "pushedToGithub": false,
+  "memoryRegression": {
+    "similarExperiences": 110,
+    "typedRecallAndManagement": "PASS",
+    "scopeAndRevisionIsolation": "PASS"
+  },
+  "verificationJarSha256": "e6992dbe0e20bfb45268cb9a45b9ecf9ecb7f7eba7d2e10404fa13648339786b",
+  "githubActionsExecuted": false,
+  "publicationStateAtValidation": "LOCAL_PRE_PUBLICATION"
+}

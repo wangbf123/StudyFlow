@@ -156,7 +156,7 @@ class QaEvidencePersistenceMySqlTest {
     void workspaceAggregatesOnlyOwnedCurrentGenerationAndSavedEvidence() throws Exception {
         persist(qa,answer());
         var workspace=new com.studyflow.workspace.WorkspaceService(
-                new KnowledgeBaseService(sql.getMapper(KnowledgeBaseMapper.class)),jdbc,sql.getMapper(DocumentMapper.class));
+                new KnowledgeBaseService(sql.getMapper(KnowledgeBaseMapper.class),jdbc),jdbc,sql.getMapper(DocumentMapper.class));
         var snapshot=workspace.overview(1L,1L);
         assertEquals(1,snapshot.documentCount());assertEquals(1,snapshot.readyCount());
         assertEquals(1,snapshot.chunkCount());assertEquals(1,snapshot.evidenceCount());
@@ -179,7 +179,7 @@ class QaEvidencePersistenceMySqlTest {
                 SELECT id+1,user_id,knowledge_base_id,'deleted.txt',file_type,file_size,file_md5,bucket,object_key,'DELETED',generation,create_time,update_time FROM document WHERE id=21
                 """);
         var workspace=new com.studyflow.workspace.WorkspaceService(
-                new KnowledgeBaseService(sql.getMapper(KnowledgeBaseMapper.class)),jdbc,sql.getMapper(DocumentMapper.class));
+                new KnowledgeBaseService(sql.getMapper(KnowledgeBaseMapper.class),jdbc),jdbc,sql.getMapper(DocumentMapper.class));
         var first=workspace.documents(1L,1L,null,1,null,null);
         assertTrue(first.hasMore());assertEquals(21L,first.items().getFirst().id());
         var second=workspace.documents(1L,1L,first.nextCursor(),1,null,null);
@@ -311,7 +311,7 @@ class QaEvidencePersistenceMySqlTest {
     }
 
     private QaService service(QaMessageMapper messageMapper, QaCitationMapper citationMapper) {
-        return new QaService(new KnowledgeBaseService(sql.getMapper(KnowledgeBaseMapper.class)),
+        return new QaService(new KnowledgeBaseService(sql.getMapper(KnowledgeBaseMapper.class),jdbc),
                 sql.getMapper(QaSessionMapper.class), messageMapper, citationMapper,
                 mock(RagRetriever.class), mock(RagPromptBuilder.class), mock(RagQueryRewriter.class),
                 mock(RagAnswerValidator.class), new RagProperties(), mock(AiClient.class), new AiProperties(),

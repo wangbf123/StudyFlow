@@ -6,6 +6,10 @@ server:
       force: true
 
 spring:
+  task:
+    scheduling:
+      pool:
+        size: 4
   application:
     name: studyflow
   servlet:
@@ -128,14 +132,37 @@ studyflow:
     bm25-weight: 0.45
     vector-weight: 0.45
     rerank-weight: 0.10
+  graph:
+    enabled: ${STUDYFLOW_GRAPH_ENABLED:false}
+    uri: ${STUDYFLOW_GRAPH_URI:bolt://127.0.0.1:7687}
+    username: ${STUDYFLOW_GRAPH_USERNAME:}
+    password: ${STUDYFLOW_GRAPH_PASSWORD:}
   agent:
     enabled: ${STUDYFLOW_AGENT_ENABLED:true}
-    # Hard limits keep the model-controlled loop bounded and observable.
+    # Snapshot per-run budgets; node checkpoints and ordered events live in MySQL.
     max-steps: ${STUDYFLOW_AGENT_MAX_STEPS:6}
-    max-history-messages: 8
-    max-tool-result-chars: 12000
+    max-model-calls: ${STUDYFLOW_AGENT_MAX_MODEL_CALLS:16}
+    max-reported-tokens: ${STUDYFLOW_AGENT_MAX_REPORTED_TOKENS:40000}
+    run-timeout-seconds: ${STUDYFLOW_AGENT_RUN_TIMEOUT_SECONDS:300}
+    action-timeout-seconds: ${STUDYFLOW_AGENT_ACTION_TIMEOUT_SECONDS:60}
+    max-attempts: 3
+    max-history-messages: 6
+    max-tool-result-chars: 8000
     max-sources: 12
-    max-read-chunks: 8
+    max-read-chunks: 6
+  harness:
+    input-tokens: ${STUDYFLOW_HARNESS_INPUT_TOKENS:8000}
+    output-tokens: ${STUDYFLOW_HARNESS_OUTPUT_TOKENS:2000}
+    artifact-chars: 64000
+    max-team-members: 3
+    # Optional OTLP gRPC collector; traces are also stored as bounded invocation metadata.
+    otlp-endpoint: ${STUDYFLOW_OTLP_ENDPOINT:}
+    sandbox-enabled: ${STUDYFLOW_SANDBOX_ENABLED:false}
+    sandbox-image: ${STUDYFLOW_SANDBOX_IMAGE:}
+    # Server-side model routes and MCP endpoints: docs/agent/harness-architecture.md
+    routing: {}
+    models: {}
+    mcp: {}
   rate-limit:
     enabled: true
     # Token bucket: capacity is max burst tokens; window-seconds is the time to refill capacity tokens.
@@ -168,6 +195,7 @@ knife4j:
 logging:
   level:
     com.studyflow: info
+    io.modelcontextprotocol: warn
 
 # Keep operational endpoints on a separate loopback listener by default.
 management:

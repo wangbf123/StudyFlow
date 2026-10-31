@@ -1,0 +1,182 @@
+{
+  "date": "2026-10-31",
+  "backend": {
+    "tests": 115,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "frontend": {
+    "tests": 13,
+    "failures": 0
+  },
+  "services": [
+    "MySQL 8.4",
+    "Elasticsearch 8.15.3",
+    "Neo4j 5.26.32"
+  ],
+  "provider": "mock / EXTRACTIVE_ONLY",
+  "suites": [
+    {
+      "name": "com.studyflow.agent.AgentGraphTest",
+      "tests": "4",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.agent.KnowledgeToolsTest",
+      "tests": "3",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.ai.NativeToolCallingTest",
+      "tests": "3",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.common.GlobalExceptionHandlerTest",
+      "tests": "4",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.config.RateLimitInterceptorTest",
+      "tests": "3",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.config.RequestTraceFilterTest",
+      "tests": "2",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.document.parser.DocumentTextParserTest",
+      "tests": "4",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.embedding.EmbeddingVectorCodecTest",
+      "tests": "2",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.embedding.MockEmbeddingClientTest",
+      "tests": "1",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.mq.AsyncTaskPublisherTest",
+      "tests": "3",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.notebook.Neo4jGraphStoreTest",
+      "tests": "4",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.notebook.PersonalKnowledgeMySqlTest",
+      "tests": "17",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.notebook.WikiLinksTest",
+      "tests": "2",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.qa.QaEvidencePersistenceMySqlTest",
+      "tests": "9",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.rag.EvidenceAnswerSecurityTest",
+      "tests": "16",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.rag.RagAnswerValidatorTest",
+      "tests": "3",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.rag.RagRerankerTest",
+      "tests": "2",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.search.EmbeddingCompatibilityTest",
+      "tests": "4",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.search.ReciprocalRankFusionTest",
+      "tests": "3",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.search.SearchProjectionIntegrationTest",
+      "tests": "1",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.task.DocumentPipelineTest",
+      "tests": "10",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.task.PipelineSchemaMigrationMySqlTest",
+      "tests": "1",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.studyflow.task.PipelineStoreMySqlTest",
+      "tests": "14",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    }
+  ]
+}

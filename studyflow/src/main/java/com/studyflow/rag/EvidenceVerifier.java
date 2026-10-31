@@ -26,7 +26,9 @@ public class EvidenceVerifier {
                 return thread;
             }, new ThreadPoolExecutor.AbortPolicy());
 
-    public Verification verify(List<GroundedClaim> claims) {
+    public Verification verify(List<GroundedClaim> claims) {return verify(claims,aiClient::chat);}
+
+    public Verification verify(List<GroundedClaim> claims,java.util.function.Function<AiChatRequest,AiChatResponse> caller) {
         String model = properties.getVerifierModel() == null || properties.getVerifierModel().isBlank()
                 ? aiProperties.getModel() : properties.getVerifierModel();
         if (claims.isEmpty()) return new Verification(Map.of(), model, 0, 0, 0, false);
@@ -46,7 +48,7 @@ public class EvidenceVerifier {
                     Return exactly {"verdicts":[{"index":0,"status":"SUPPORTED"}]} as JSON.
                     Return one verdict for every supplied index, with no extra fields or indices.
                     """;
-            future = executor.submit(() -> aiClient.chat(new AiChatRequest(system, payload, "Verify evidence support", model, 0.0)));
+            future = executor.submit(() -> caller.apply(new AiChatRequest(system, payload, "Verify evidence support", model, 0.0)));
             AiChatResponse response = future.get(Math.max(1, properties.getVerifierTimeoutSeconds()), TimeUnit.SECONDS);
             if (response.content() == null || response.content().length() > 16000) throw new IllegalArgumentException("oversized verdict");
             JsonNode root = objectMapper.reader().with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)

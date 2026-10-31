@@ -1,5 +1,7 @@
 # 技术文章与社区发布稿
 
+本分支的最新实现说明见 [个人知识工作区](../../studyflow/docs/guides/personal-workspace.md)、[四层十二模块 Agent](../../studyflow/docs/agent/harness-architecture.md) 与 [验证记录](../../studyflow/docs/harness-verification.md)。下方文章保留资料检索与证据恢复主题。
+
 已完成 [《Spring Boot RAG 知识库：如何约束伪造引用，并在任务崩溃后继续处理？》](evidence-and-recovery.md)。这是可审阅的 Markdown 稿件，尚未发布到掘金、知乎或其他社区。
 
 社区简介可使用：

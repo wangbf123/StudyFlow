@@ -1,3 +1,3 @@
 {
-  "description": "Evidence-grounded RAG knowledge base with Spring Boot, Vue and Elasticsearch hybrid search, verifiable citations, and recoverable document pipelines."
+  "description": "Personal knowledge workspace with linked Markdown notes, scoped knowledge graphs, and a durable agent harness for memory, MCP, collaboration and verifiable research."
 }

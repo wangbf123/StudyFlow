@@ -9,6 +9,11 @@
     "vue",
     "retrieval-augmented-generation",
     "vector-search",
-    "document-processing"
+    "document-processing",
+    "ai-agent",
+    "knowledge-graph",
+    "model-context-protocol",
+    "multi-agent",
+    "personal-knowledge-management"
   ]
 }

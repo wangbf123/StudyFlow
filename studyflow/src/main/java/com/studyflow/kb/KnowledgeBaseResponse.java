@@ -8,6 +8,9 @@ public record KnowledgeBaseResponse(
         String description,
         String status,
         LocalDateTime createTime,
+        Long parentId,
+        String templateKey,
+        String color,
         LocalDateTime updateTime
 ) {
     public static KnowledgeBaseResponse from(KnowledgeBaseEntity entity) {
@@ -17,6 +20,9 @@ public record KnowledgeBaseResponse(
                 entity.getDescription(),
                 entity.getStatus(),
                 entity.getCreateTime(),
+                entity.getParentId(),
+                entity.getTemplateKey(),
+                entity.getColor(),
                 entity.getUpdateTime()
         );
     }

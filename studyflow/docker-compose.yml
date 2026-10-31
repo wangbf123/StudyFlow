@@ -51,6 +51,28 @@ services:
     volumes:
       - studyflow-elasticsearch:/usr/share/elasticsearch/data
 
+  neo4j:
+    image: neo4j:5.26-community@sha256:249a1ec6e3c52d82101a5ed33d6ed2b5ed5b0017b21a28c0bfebc335e87fb177
+    profiles: [graph]
+    environment:
+      NEO4J_AUTH: neo4j/${STUDYFLOW_GRAPH_PASSWORD:-studyflow-local-only}
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 256m
+      NEO4J_server_memory_pagecache_size: 128m
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - studyflow-neo4j:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          cypher-shell -a bolt://localhost:7687 -u neo4j -p "$${NEO4J_AUTH#*/}" 'RETURN 1' >/dev/null
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
   rocketmq-namesrv:
     image: apache/rocketmq:5.3.0
     container_name: studyflow-rocketmq-namesrv
@@ -89,6 +111,7 @@ services:
       - studyflow-paddleocr-cache:/root/.cache
 
 volumes:
+  studyflow-neo4j:
   studyflow-mysql:
   studyflow-redis:
   studyflow-minio:

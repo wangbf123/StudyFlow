@@ -21,6 +21,19 @@ public class EvidenceAnswerService {
 
     public VerifiedAnswer verify(String raw, RagPrompt prompt, Long userId, Long knowledgeBaseId) {
         knowledgeBaseService.getOwnedActive(userId, knowledgeBaseId);
+        return verifyScoped(raw,prompt,span -> {
+            knowledgeBaseService.getOwnedActive(userId, knowledgeBaseId);
+            DocumentChunkEntity chunk=chunkMapper.selectById(span.chunk().chunkId());
+            DocumentEntity doc=chunk==null?null:documentMapper.selectById(chunk.getDocumentId());
+            return current(chunk,doc,span,userId,knowledgeBaseId)?span.withGeneration(chunk.getGeneration()):null;
+        });
+    }
+
+    /** Reuses the same claim/quote and semantic verification for scoped note and document sources. */
+    public VerifiedAnswer verifyScoped(String raw,RagPrompt prompt,java.util.function.Function<EvidenceSpan,EvidenceSpan> access) {
+        return verifyScoped(raw,prompt,access,"mock".equalsIgnoreCase(aiProperties.getProvider()),null);
+    }
+    public VerifiedAnswer verifyScoped(String raw,RagPrompt prompt,java.util.function.Function<EvidenceSpan,EvidenceSpan> access,boolean extractive,java.util.function.Function<com.studyflow.ai.AiChatRequest,com.studyflow.ai.AiChatResponse> caller) {
         EvidenceValidation parsed = validator.validate(raw, prompt);
         List<GroundedClaim> owned = new ArrayList<>();
         int rejected = parsed.rejected();
@@ -28,26 +41,21 @@ public class EvidenceAnswerService {
             List<EvidenceSpan> checked = new ArrayList<>();
             boolean valid = true;
             for (EvidenceSpan span : claim.evidence()) {
-                DocumentChunkEntity chunk = chunkMapper.selectById(span.chunk().chunkId());
-                DocumentEntity doc = chunk == null ? null : documentMapper.selectById(chunk.getDocumentId());
-                if (!current(chunk, doc, span, userId, knowledgeBaseId)) { valid = false; break; }
-                checked.add(span.withGeneration(chunk.getGeneration()));
+                EvidenceSpan refreshed=access.apply(span);
+                if(refreshed==null){valid=false;break;}
+                checked.add(refreshed);
             }
             if (valid) owned.add(new GroundedClaim(claim.index(), claim.text(), List.copyOf(checked)));
             else rejected++;
         }
-        boolean extractive = "mock".equalsIgnoreCase(aiProperties.getProvider());
-        EvidenceVerifier.Verification result = extractive ? null : verifier.verify(owned);
-        knowledgeBaseService.getOwnedActive(userId, knowledgeBaseId);
+        EvidenceVerifier.Verification result = extractive ? null : caller==null?verifier.verify(owned):verifier.verify(owned,caller);
         List<GroundedClaim> accepted = new ArrayList<>();
         for (GroundedClaim claim : owned) {
             boolean supported = extractive
                     ? claim.evidence().stream().allMatch(span -> claim.text().equals(span.quote()))
                     : "SUPPORTED".equals(result.verdicts().get(claim.index()));
             // Check again after remote verification: rebuild/deletion must invalidate a stale answer.
-            if (supported) supported = claim.evidence().stream().allMatch(span -> current(
-                    chunkMapper.selectById(span.chunk().chunkId()), documentMapper.selectById(span.chunk().documentId()),
-                    span, userId, knowledgeBaseId));
+            if (supported) supported = claim.evidence().stream().allMatch(span -> access.apply(span)!=null);
             if (supported) accepted.add(claim); else rejected++;
         }
         String status = accepted.isEmpty() ? (result != null && result.failed() ? "VERIFICATION_UNAVAILABLE" : "ABSTAINED")

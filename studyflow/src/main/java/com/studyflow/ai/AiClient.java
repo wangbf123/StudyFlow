@@ -8,6 +8,10 @@ public interface AiClient {
 
     AiChatResponse chat(AiChatRequest request);
 
+    default AiToolResponse callTool(AiToolRequest request) {
+        throw new UnsupportedOperationException("This AI provider does not support native tool calling");
+    }
+
     default AiChatResponse streamChat(AiChatRequest request, Consumer<AiStreamChunk> onChunk) {
         AiChatResponse response = chat(request);
         if (response.content() != null && !response.content().isEmpty()) {

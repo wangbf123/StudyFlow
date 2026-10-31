@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-31",
+  "layers": 4,
+  "modules": 12,
+  "skills": 5,
+  "collaborativeRun": "SUCCESS",
+  "children": 3,
+  "disjointScopeCoverage": "PASS",
+  "sharedModelCalls": 22,
+  "tokenManifests": "PASS",
+  "scopedMemoryRecall": "PASS",
+  "sourceRevisionInvalidation": "PASS",
+  "forgetMemory": "PASS",
+  "cancelCascade": "PASS",
+  "collaborationRetryPreserved": "PASS",
+  "invalidMemoryNotReinjected": "PASS",
+  "crossInstanceDiagnostics": "PASS",
+  "evaluation": {
+    "checks": [
+      {
+        "name": "TASK_TERMINAL",
+        "passed": true
+      },
+      {
+        "name": "CHILD_SCOPE_SUBSET",
+        "passed": true
+      },
+      {
+        "name": "SHARED_TOKEN_BUDGET",
+        "passed": true
+      },
+      {
+        "name": "PUBLISHED_EVIDENCE_CURRENT",
+        "passed": true
+      }
+    ],
+    "verificationStatus": "EXTRACTED",
+    "usageComplete": true,
+    "semanticCompleteness": "NOT_INDEPENDENTLY_SCORED",
+    "claimCount": 2
+  },
+  "modelMode": "EXTRACTIVE_ONLY",
+  "mcpWireProtocol": "COVERED_BY_JUNIT_LOCAL_SERVER",
+  "remoteModelQuality": "NOT_MEASURED"
+}

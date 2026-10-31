@@ -1,168 +1,82 @@
-# StudyFlow Learning Agent
+# StudyFlow Knowledge Agent
 
-StudyFlow Learning Agent 是建立在知识库、混合检索、文档服务和 AI Client 之上的受控任务执行层。用户提供一个学习目标，Agent 根据目标和会话历史选择只读工具，获取证据后生成带来源的最终结果。
+当前 Agent 已从旧的文本 JSON 决策循环重构为四层十二模块 Harness。知识范围、记忆、工具、模型和执行状态分别管理，默认服务于个人知识库研究。
 
-## 1. 执行协议
+完整模块、依赖版本与配置见 [Harness 架构](agent/harness-architecture.md)，操作见 [知识工作区指南](guides/personal-workspace.md)，实测见 [验证记录](harness-verification.md)。
 
-模型每轮必须返回一个 JSON 对象。工具调用格式：
+## 执行与状态
+
+```text
+PLAN → DECIDE ⇄ TOOL → SYNTHESIZE → VERIFY → 原子发布报告
+       ↑
+PLAN → TEAM_DISPATCH → WAIT_CHILDREN（完成后汇总）
+```
+
+LangGraph4j 负责图拓扑与恢复；MySQL 是唯一持久化状态权威。Runtime 调度有界节点执行，Harness 选择下一步，Environment 提供获准的运行能力。节点状态、工具结果、事件和报告提交前校验租约、用户范围、取消、deadline 与预算。
+
+协作最多三个独立研究子任务，深度为一，分担父任务选定范围的子集。子任务共享根任务调用和 Token 预算，等待阶段释放工作线程，取消级联；重试创建新 run 和新预算并保留协作模式。外部调用可能在崩溃后重放，不宣称跨供应商 exactly-once。
+
+## 模型、上下文和记忆
+
+- 模型调用统一经过 Model Gateway；阶段可使用不同的 OpenAI-compatible 或 Claude 原生模型。
+- 工具选择使用原生 Function Calling / Tool Use，不再解析旧 `action/tool/finalAnswer` 文本协议。
+- 默认输入预算 8,000、输出预留 2,000 tokens；按 O200K 估算，并另记供应商实际报告用量。
+- 目标、知识范围和计划固定；旧工具正文结构化压缩，完整有界结果可分页重读。
+- 偏好、知识、方法和经历按类型保留候选与召回位置，过滤范围、来源版本与有效期，支持主动忘记。
+- 会话状态不等于长期记忆；记忆和子任务报告不能直接充当当前事实证据。
+
+## 工具与知识来源
+
+| 工具/能力 | 约束 |
+|---|---|
+| `knowledge_overview` / `list_documents` | 只读取选定的活动知识库 |
+| `search_knowledge` / `read_document` | 复用混合检索，校验文档归属、generation 与内容 |
+| `search_notes` / `read_note` | 返回当前范围内笔记及版本证据 |
+| `explore_graph` | 只导航明确链接；图关系不能代替原文 |
+| `search_memory` / `read_tool_result` | 限定当前范围或当前 run，结果有界 |
+| `complete_plan_step` | 需要已有成功工具观察和已完成前置步骤；属于 Agent 自评 |
+| MCP | 管理员配置精确端点/白名单，用户绑定知识库；文本导入后进入来源核验链 |
+| `run_python` | 仅启用沙箱后的 coding Skill 可用；无网络、无宿主机挂载且有资源/时间/输出限制 |
+
+工具 Schema、范围和角色工具集均由服务端验证；不允许模型自行指定用户身份、服务器地址或宿主机 Shell 命令。部署配置和当前支持的 MCP 协议能力见架构文档。
+
+## 成果与核验
+
+研究来源由当前笔记和文档原文构成。声明必须绑定白名单来源及连续引文；真实模型模式额外执行独立核验请求，发布事务中再次检查版本与权限。来源变化后，历史成果显示失效提示。
+
+默认 Mock 只生成 `EXTRACTIVE_ONLY` 原文摘录，不代表语义研究效果。运行评估检查任务结束、范围、共享预算和证据当前性，语义完整性标为 `NOT_INDEPENDENTLY_SCORED`。系统不保存模型私有推理。
+
+## API 与事件
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| POST | `/api/agent/runs` | 幂等创建持久化任务 |
+| GET | `/api/agent/runs/{id}` | 状态、预算、成果 |
+| POST | `/api/agent/runs/{id}/cancel`、`/retry` | 取消或创建重试任务 |
+| GET | `/api/agent/sessions`、`/sessions/{id}/runs` | 会话和运行历史 |
+| GET | `/api/agent/runs/{id}/events`、`/events/stream` | 分页事件与 SSE 回放，使用 after 游标 |
+| GET | `/api/agent/runs/{id}/artifact` | 下载 Markdown 报告 |
+| POST | `/api/agent/runs/{id}/save-note` | 幂等保存为带引用链接的笔记 |
+| GET | `/api/agent/architecture` | 十二模块、Skill 和脱敏能力目录 |
+| GET / POST / DELETE | `/api/agent/memories`、`/memories/{id}` | 检查、保存、忘记记忆 |
+| GET / PUT | `/api/agent/connections`、`/connections/{key}` | 连接目录与范围绑定 |
+| GET / POST | `/api/agent/connections/{key}/resources`、`/import` | 浏览和显式导入文本 |
+| GET | `/api/agent/runs/{id}/diagnostics`、`/evaluation` | 上下文、子任务、用量、调用轨迹和运行检查 |
+
+SSE 使用 `agent_event` 包装带 runId/seq/type/data 的已提交事件，以 `run_end` 终止；具体事件包括 plan_created、tool_selected、tool_completed、team_dispatched、team_collected、evidence_checked 和 run_finished。断流不等于任务失败，应从已保存游标恢复。
+
+创建请求示例；知识库和笔记 ID 应替换为当前账号实际拥有的 ID：
 
 ```json
 {
-  "action": "tool",
-  "tool": "search_knowledge",
-  "arguments": {
-    "query": "Redis AOF 与 RDB 的差异",
-    "topK": 5
-  },
-  "summary": "检索知识库中的相关内容"
+  "knowledgeBaseId": "123",
+  "knowledgeBaseIds": ["123", "124"],
+  "goal": "对比两个领域的资料，并生成带原文引用的报告",
+  "skill": "compare",
+  "contextNoteId": null,
+  "collaboration": true,
+  "requestKey": "docs-agent-task-001"
 }
 ```
 
-最终结果格式：
-
-```json
-{
-  "action": "final",
-  "finalAnswer": "整理后的结论，并用 [C123] 标注来源",
-  "summary": "根据已读取证据完成归纳"
-}
-```
-
-`AgentDecisionParser` 会从模型文本中提取 JSON，校验 action、工具名、参数对象和最终答案。非法决策会转成可记录的执行失败。
-
-## 2. 执行循环
-
-```text
-创建或恢复 session
--> 创建 run
--> 加载最近历史消息
--> 构建系统提示、目标、历史与 observations
--> 调用模型得到 decision
-   -> tool: 校验、执行、记录 step 与 source
-   -> final: 保存最终 step、run 和会话消息
--> 将工具 observation 放入下一轮
--> 达到 final 或最大步骤数
-```
-
-默认最多 6 步，代码硬上限为 12。达到上限仍未产生最终答案时，运行会以明确状态结束，而不是无限循环。
-
-## 3. 工具注册表
-
-所有工具实现 `AgentTool`：
-
-```text
-name()
-description()
-inputSchema()
-execute(context, arguments)
-```
-
-`AgentToolRegistry` 在应用启动时收集工具并检查重名。模型只看到工具目录，不知道实现类、数据库结构或基础设施凭据。
-
-### search_knowledge
-
-调用现有 `RagRetriever`，在当前用户和当前知识库执行混合检索。每个结果生成来源编号 `C{chunkId}`，并返回文档名、分片序号、得分和截断内容。
-
-### list_documents
-
-调用 `DocumentService.listByKnowledgeBase`，返回知识库内文档、类型、解析状态和摘要。权限检查仍由领域服务完成。
-
-### read_document
-
-先读取文档并确认其属于活动知识库，再返回前若干分片。最大分片数由 `max-read-chunks` 控制。
-
-## 4. 数据模型
-
-```text
-agent_session 1 --- n agent_run
-agent_session 1 --- n agent_message
-agent_run     1 --- n agent_step
-agent_run     1 --- n agent_source
-```
-
-| 表 | 说明 |
-| --- | --- |
-| `agent_session` | 多轮任务会话，绑定用户和知识库 |
-| `agent_message` | 用户目标与最终回答组成的短期记忆 |
-| `agent_run` | 一次完整运行，保存状态、最终答案、模型、token、步骤数和耗时 |
-| `agent_step` | 每轮决策或工具调用的输入、输出、摘要、状态和耗时 |
-| `agent_source` | 运行实际查看过的证据分片 |
-
-来源表以 `(run_id, chunk_id)` 保证同一次运行不会重复保存同一证据。
-
-## 5. SSE 事件
-
-```text
-run_start   已创建运行与会话
-tool_start  即将调用一个工具
-step        一个步骤已经持久化
-run_end     返回完整 AgentRunResponse
-error       运行失败
-```
-
-前端可以在执行过程中增量展示工具和步骤，并在 `run_end` 后显示最终答案、来源和完整轨迹。
-
-## 6. 安全控制
-
-- 只允许注册表中的工具。
-- 工具上下文由服务端生成，模型不能指定 userId。
-- 每个工具调用领域服务做知识库和文档归属检查。
-- 参数和输出长度有上限。
-- 相同工具与参数组合只执行一次。
-- 工具结果在 Prompt 中被标记为不可信资料。
-- 不保存隐式推理，只保存短动作摘要。
-- 当前只开放读取类工具，不自动执行外部写操作。
-- 接口使用 Redis 令牌桶控制每用户运行频率。
-
-## 7. 配置
-
-```yaml
-studyflow:
-  agent:
-    enabled: true
-    max-steps: 6
-    max-history-messages: 8
-    max-tool-result-chars: 12000
-    max-sources: 12
-    max-read-chunks: 8
-```
-
-环境变量：
-
-```powershell
-$env:STUDYFLOW_AGENT_ENABLED="true"
-$env:STUDYFLOW_AGENT_MAX_STEPS="6"
-```
-
-## 8. API
-
-```http
-POST /api/agent/runs
-POST /api/agent/runs/stream
-GET  /api/agent/sessions?knowledgeBaseId={id}
-GET  /api/agent/sessions/{sessionId}/runs
-GET  /api/agent/runs/{runId}
-```
-
-创建运行请求：
-
-```json
-{
-  "knowledgeBaseId": 1,
-  "sessionId": null,
-  "goal": "对比两份资料的核心观点，并给出按优先级排序的学习计划"
-}
-```
-
-## 9. 扩展原则
-
-新增只读工具时，应明确输入 schema、数据范围、最大返回量和来源提取方式。新增写工具时，还应增加：
-
-- 用户确认或审批状态；
-- 幂等键；
-- 权限策略；
-- 审计记录；
-- 超时和重试边界；
-- 可撤销或补偿机制。
-
-后续可以增加生成测验、生成复习卡片、保存学习计划、读取学习进度等工具，并将 JSON 决策适配为原生 function calling。工具层和持久化层可以保持不变。
+旧 `/api/agent/runs/stream` 兼容入口保留，但推荐分离创建和订阅。原有学习 Agent 数据保留为历史记录，不自动赋予当前核验保证。请求、响应字段和知识笔记接口见 [API 指南](guides/api.md)。

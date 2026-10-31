@@ -1,0 +1,10 @@
+{
+  "date": "2026-10-31",
+  "bothInstancesKilledAfterCommittedPlan": true,
+  "sameTokenAfterRestart": "PASS",
+  "resumedRun": "SUCCESS",
+  "committedPlanNotRepeated": "PASS",
+  "recoveredLease": false,
+  "completionAfterRestartSeconds": 16.48,
+  "jarSha256": "a6f21bbc14e1e1268eb03b0589a188c3e6ce5d5b03472926866b366ed9b03bd1"
+}

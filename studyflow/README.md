@@ -2,7 +2,7 @@
 
 本目录包含 StudyFlow 的 Spring Boot 后端、数据库迁移、Docker Compose 基础设施、OCR 服务和验证脚本。系统负责账号与权限、知识库、文件上传、文档解析、搜索索引、RAG 问答、引用追踪、质量评估以及学习 Agent 编排。
 
-总体设计与项目价值请先阅读仓库根目录的 `README.md`，更深入的实现说明见 `docs/TECHNICAL_ARCHITECTURE.md`。
+总体设计见 [项目首页](../README.md)。当前能力以 [个人知识工作区](docs/guides/personal-workspace.md)、[知识图谱与一致性](docs/agent/personal-knowledge-architecture.md)、[四层十二模块 Agent](docs/agent/harness-architecture.md) 和 [验证报告](docs/harness-verification.md) 为准。数据库由 Flyway 增量升级到 V15。
 
 ## 运行组件
 
@@ -12,7 +12,8 @@
 | MySQL | 3307 | 业务数据、任务状态、消息、引用和 Agent 轨迹 |
 | Redis | 6379 | 令牌桶限流、Redisson 分布式锁 |
 | MinIO | 9000 / 9001 | 文档对象、上传分片、管理控制台 |
-| Elasticsearch | 9200 | 文档分片 BM25 索引 |
+| Elasticsearch | 9200 | 文档分片 BM25 / 向量 / RRF 检索 |
+| Neo4j（可选） | 7474 / 7687 | 带版本的知识关系投影；默认使用 MySQL 规范查询 |
 | RocketMQ NameServer | 9876 | 解析任务路由 |
 | RocketMQ Broker | 10909 / 10911 | 解析任务消息 |
 | PaddleOCR | 8866 | 扫描页与图片识别 |
@@ -65,7 +66,9 @@ mvn spring-boot:run
 | `studyflow.ai` | AI 提供方、模型、超时和温度 |
 | `studyflow.embedding` | 向量提供方、模型、维度和批量大小 |
 | `studyflow.rag` | topK、上下文预算、候选规模和融合权重 |
-| `studyflow.agent` | Agent 开关、最大步数、历史和工具结果上限 |
+| `studyflow.agent` | 持久化任务、调用预算、节点超时和历史上限 |
+| `studyflow.harness` | Token 预算、模型路由、MCP、OTLP 与可选沙箱 |
+| `studyflow.graph` | 可选 Neo4j 连接与关系投影 |
 | `studyflow.rate-limit` | 不同接口的令牌桶容量和恢复窗口 |
 
 真实 AI 服务配置示例：

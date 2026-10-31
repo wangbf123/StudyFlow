@@ -51,10 +51,10 @@ public class OpenAiCompatibleAiClient implements AiClient {
                         new Message("user", request.userPrompt())
                 ),
                 request.temperature() == null ? properties.getTemperature() : request.temperature(),
-                false
+                false, request.maxOutputTokens()
         );
 
-        OpenAiChatResponse response = restClientBuilder
+        OpenAiChatResponse response = restClientBuilder.clone()
                 .baseUrl(trimTrailingSlash(properties.getBaseUrl()))
                 .requestFactory(requestFactory())
                 .build()
@@ -94,6 +94,49 @@ public class OpenAiCompatibleAiClient implements AiClient {
     }
 
     @Override
+    public AiToolResponse callTool(AiToolRequest request) {
+        validateConfig();
+        String model = chooseModel(request.model());
+        var definitions = request.tools().stream().map(tool -> java.util.Map.of("type", "function", "function",
+                java.util.Map.of("name", tool.name(), "description", tool.description(), "parameters", tool.parameters()))).toList();
+        var body = java.util.Map.of("model", model, "messages", List.of(
+                new Message("system", request.systemPrompt()), new Message("user", request.userPrompt())),
+                "tools", definitions, "tool_choice", "required", "parallel_tool_calls", false, "stream", false, "max_tokens", request.maxOutputTokens()==null?2000:request.maxOutputTokens());
+        var root = restClientBuilder.clone().baseUrl(trimTrailingSlash(properties.getBaseUrl()))
+                .requestFactory(requestFactory()).build().post().uri("/chat/completions")
+                .contentType(MediaType.APPLICATION_JSON).header("Authorization", "Bearer " + properties.getApiKey())
+                .body(body).exchange((req, res) -> {
+                    if (res.getStatusCode().isError()) throw new BusinessException(502, "AI tool provider failed: HTTP " + res.getStatusCode().value());
+                    int limit = Math.clamp(properties.getMaxResponseBytes(), 1024, 4_194_304);
+                    byte[] bytes = res.getBody().readNBytes(limit + 1);
+                    if (bytes.length > limit) throw new BusinessException(502, "AI tool response exceeds size limit");
+                    return objectMapper.reader().with(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                            .with(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION).readTree(bytes);
+                });
+        if (root == null || !root.path("choices").isArray() || root.path("choices").size() != 1) throw new BusinessException(502, "Expected one tool choice");
+        var calls = root.path("choices").get(0).path("message").path("tool_calls");
+        if (!calls.isArray() || calls.size() != 1 || !"function".equals(calls.get(0).path("type").asText()))
+            throw new BusinessException(502, "Expected exactly one function call");
+        var function = calls.get(0).path("function");
+        String name = function.path("name").asText("");
+        if (request.tools().stream().noneMatch(tool -> tool.name().equals(name))) throw new BusinessException(502, "Unknown tool returned by provider");
+        try {
+            String raw = function.path("arguments").textValue();
+            if (raw == null || raw.length() > 8000) throw new IllegalArgumentException();
+            var args = objectMapper.reader().with(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                    .with(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION).readTree(raw);
+            if (!args.isObject()) throw new IllegalArgumentException();
+            var usage = root.path("usage");
+            return new AiToolResponse(name, args, root.path("model").asText(model),
+                    tokenCount(usage.path("prompt_tokens")), tokenCount(usage.path("completion_tokens")));
+        } catch (Exception ex) { throw new BusinessException(502, "Invalid tool arguments from provider"); }
+    }
+
+    private Integer tokenCount(com.fasterxml.jackson.databind.JsonNode value) {
+        return value.isIntegralNumber() && value.canConvertToInt() && value.asInt() >= 0 ? value.asInt() : null;
+    }
+
+    @Override
     public AiChatResponse streamChat(AiChatRequest request, Consumer<AiStreamChunk> onChunk) {
         validateConfig();
         String model = chooseModel(request.model());
@@ -104,7 +147,7 @@ public class OpenAiCompatibleAiClient implements AiClient {
                         new Message("user", request.userPrompt())
                 ),
                 request.temperature() == null ? properties.getTemperature() : request.temperature(),
-                true
+                true, request.maxOutputTokens()
         );
 
         StringBuilder content = new StringBuilder();
@@ -112,7 +155,7 @@ public class OpenAiCompatibleAiClient implements AiClient {
         AtomicInteger promptTokens = new AtomicInteger(-1);
         AtomicInteger completionTokens = new AtomicInteger(-1);
 
-        restClientBuilder
+        restClientBuilder.clone()
                 .baseUrl(trimTrailingSlash(properties.getBaseUrl()))
                 .requestFactory(requestFactory())
                 .build()
@@ -245,7 +288,8 @@ public class OpenAiCompatibleAiClient implements AiClient {
             String model,
             List<Message> messages,
             Double temperature,
-            Boolean stream
+            Boolean stream,
+            @JsonProperty("max_tokens") @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Integer maxTokens
     ) {
     }
 

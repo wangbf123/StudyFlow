@@ -1,0 +1,11 @@
+{
+  "date": "2026-10-31",
+  "childLeasesRecovered": 3,
+  "children": "SUCCESS",
+  "root": "SUCCESS",
+  "sharedModelCalls": 25,
+  "rootUsageIncomplete": true,
+  "chargedTokens": 6927,
+  "reservedTokens": 0,
+  "resetBudgetAfterCrash": false
+}

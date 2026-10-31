@@ -1,0 +1,16 @@
+{
+  "rootRecoveredLease": false,
+  "childRecoveredLeases": 0,
+  "uncertainUsageVisibleAtRoot": false,
+  "chargedTokensAfterRestart": "0",
+  "children": 3,
+  "sharedCallsAfterRestart": 22,
+  "date": "2026-10-31",
+  "bothInstancesKilledAfterCommittedTeamDispatch": true,
+  "sameTokenAfterRestart": "PASS",
+  "resumedRun": "SUCCESS",
+  "committedPlanNotRepeated": "PASS",
+  "recoveredLease": false,
+  "completionAfterRestartSeconds": 22.82,
+  "jarSha256": "bf4db1fddc45915ae429020b6d42168ad02d8c31093aa8f29dfa0780ea10520a"
+}

@@ -1,0 +1,12 @@
+{
+  "date": "2026-10-31",
+  "server": "LOCAL_MCP_PROTOCOL_FIXTURE",
+  "sdk": "2.1.0",
+  "authenticatedBinding": "PASS",
+  "resourceBrowse": "PASS",
+  "importToVersionedNote": "PASS",
+  "uriAllowlist": "PASS",
+  "targetScopeRestriction": "PASS",
+  "revokeBinding": "PASS",
+  "thirdPartyServiceAvailability": "NOT_MEASURED"
+}

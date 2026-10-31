@@ -18,6 +18,10 @@ public class KnowledgeBaseEntity {
     private String name;
     private String description;
     private String status;
+    private Long parentId;
+    private String templateKey;
+    private String color;
+    private String settingsJson;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
